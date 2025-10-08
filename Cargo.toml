@@ -2,6 +2,7 @@
 name = "server"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
 
 [dependencies]
 serde = {  version = "1.0.228", features = ["derive"] }
@@ -9,3 +10,6 @@ structopt = "0.3.26"
 tokio = {  version = "1.47.1" , features = ["full"] }
 toml = "0.9.7"
 regex = "1"
+
+[build-dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

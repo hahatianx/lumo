@@ -14,16 +14,19 @@ use structopt::clap::ErrorKind;
 /// arguments so Cargo stops parsing its own flags.
 #[derive(StructOpt, Debug)]
 pub struct Opts {
-
     #[structopt(short = "v", long = "version")]
     pub version: bool,
 
     #[structopt(short, long, help = "Enable debug mode (verbose logging)")]
     pub debug: bool,
 
-    #[structopt(short = "c", long = "config", help = "Path to the configuration file. If using `cargo run`, pass after `--`, e.g., `cargo run -- --config config.toml`.")]
-    pub config: PathBuf,
-
+    #[structopt(
+        short = "c",
+        long = "config",
+        required_unless = "version",
+        help = "Path to the configuration file."
+    )]
+    pub config: Option<PathBuf>,
 }
 
 impl Opts {

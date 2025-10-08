@@ -1,11 +1,11 @@
 use crate::err::Result;
-use std::fs;
-use std::io::{Write, IsTerminal};
-use serde::{Deserialize, Serialize};
-use structopt::lazy_static::lazy_static;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap as Map;
+use std::fs;
+use std::io::{IsTerminal, Write};
 use std::path::Path;
+use structopt::lazy_static::lazy_static;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Identity {
@@ -22,19 +22,13 @@ struct Connection {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct AppConfig {
-
-
-
-}
+struct AppConfig {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
-
     identity: Identity,
     connection: Connection,
     app_config: AppConfig,
-
 }
 
 impl Config {
@@ -49,12 +43,11 @@ impl Config {
                 conn_token: String::from(""),
                 port: 0,
             },
-            app_config: AppConfig {}
+            app_config: AppConfig {},
         }
     }
 
     pub fn from_config(config_path: Option<&str>) -> Result<Self> {
-
         match config_path {
             Some(p) => {
                 // Expand leading '~/'' HOME to support shell-like paths in config defaults
@@ -72,7 +65,7 @@ impl Config {
                     Err(e) => Err(e.into()),
                 }
             }
-            None => { Err("No config file provided".into())}
+            None => Err("No config file provided".into()),
         }
     }
 
@@ -89,7 +82,6 @@ impl Config {
         Ok(())
     }
 }
-
 
 enum ConfigInputValue {
     String(String),
@@ -127,7 +119,10 @@ impl ConfigInput {
     }
 
     pub fn to_error_msg(&self, input: &str) -> String {
-        format!("expect input to follow pattern /{}/, the input '{}' does not meet requirements. please input again: ", self.pattern, input)
+        format!(
+            "expect input to follow pattern /{}/, the input '{}' does not meet requirements. please input again: ",
+            self.pattern, input
+        )
     }
 
     pub fn test_pattern(&self, input: &str) -> bool {
@@ -142,11 +137,10 @@ impl ConfigInput {
             Err(err) => {
                 eprintln!("Invalid regex in config: {}", err);
                 false
-            },
+            }
         }
     }
 }
-
 
 lazy_static! {
     static ref CONFIG_INPUT_LIST: Vec<ConfigInput> = vec!(
@@ -171,7 +165,9 @@ lazy_static! {
         ConfigInput {
             name: String::from("conn_token"),
             pattern: String::from(r"^[0-9a-zA-Z]{1,64}$"),
-            description: String::from("Set a connection token for the server to use. All servers sharing the same token join in the same disc group. This should be a random string of 1-64 alphanumeric characters."),
+            description: String::from(
+                "Set a connection token for the server to use. All servers sharing the same token join in the same disc group. This should be a random string of 1-64 alphanumeric characters."
+            ),
             default: None,
         },
         ConfigInput {
@@ -197,7 +193,7 @@ fn read_input(required_input: &ConfigInput) -> Result<(String, String)> {
                     return Ok((required_input.name.clone(), default.to_string()));
                 }
             }
-            return Ok((required_input.name.clone(), input))
+            return Ok((required_input.name.clone(), input));
         }
         print!("{}", required_input.to_error_msg(&input));
         std::io::stdout().flush()?;
@@ -207,17 +203,14 @@ fn read_input(required_input: &ConfigInput) -> Result<(String, String)> {
 }
 
 pub fn interactive_config_setup(default_config_path: &str) -> Result<Config> {
-
     let mut config = Config::new();
 
     let mut input_map = Map::<String, String>::new();
 
     // looping through the list of inputs, asking for each one and storing the result in a map
     for required_input in CONFIG_INPUT_LIST.iter() {
-
         let (name, input) = read_input(required_input)?;
         input_map.insert(name, input);
-
     }
 
     // last question: where do you want to store this config?
@@ -230,12 +223,15 @@ pub fn interactive_config_setup(default_config_path: &str) -> Result<Config> {
     let (name, input) = read_input(&config_file_input)?;
     input_map.insert(name, input);
 
-
     config.identity.machine_name = input_map.remove("machine_name").unwrap();
     config.identity.private_key_loc = input_map.remove("private_key_location").unwrap();
     config.identity.public_key_loc = input_map.remove("public_key_location").unwrap();
     config.connection.conn_token = input_map.remove("conn_token").unwrap();
-    config.connection.port = input_map.remove("port_number").unwrap().parse::<u16>().unwrap();
+    config.connection.port = input_map
+        .remove("port_number")
+        .unwrap()
+        .parse::<u16>()
+        .unwrap();
 
     let save_path_input = input_map.remove("config_path").unwrap();
     let save_path = if save_path_input.starts_with("~/") {
@@ -363,12 +359,16 @@ mod tests {
         if parent.exists() {
             fs::remove_dir_all(parent).ok();
         }
-        cfg.dump(path.to_str().unwrap()).expect("dump should succeed");
+        cfg.dump(path.to_str().unwrap())
+            .expect("dump should succeed");
         assert!(path.exists());
 
         // Read back and validate some fields
         let mut s = String::new();
-        fs::File::open(&path).unwrap().read_to_string(&mut s).unwrap();
+        fs::File::open(&path)
+            .unwrap()
+            .read_to_string(&mut s)
+            .unwrap();
         let loaded: Config = toml::from_str(&s).unwrap();
         assert_eq!(loaded.identity.machine_name, "m1");
         assert_eq!(loaded.connection.port, 1234);
@@ -380,7 +380,9 @@ mod tests {
         let tmp_home = unique_temp_path("home_root");
         fs::create_dir_all(&tmp_home).unwrap();
         let prev_home = env::var_os("HOME");
-        unsafe { env::set_var("HOME", &tmp_home); }
+        unsafe {
+            env::set_var("HOME", &tmp_home);
+        }
         let config_path = tmp_home.join("disc_config.toml");
 
         // Write a minimal valid config
@@ -393,18 +395,22 @@ mod tests {
         cfg.dump(config_path.to_str().unwrap()).unwrap();
 
         // Load using a path that starts with ~/ ...
-        let loaded = Config::from_config(Some("~/disc_config.toml")).expect("should load via ~ expansion");
+        let loaded =
+            Config::from_config(Some("~/disc_config.toml")).expect("should load via ~ expansion");
         assert_eq!(loaded.identity.machine_name, "local");
         assert_eq!(loaded.connection.port, 8081);
 
         // Restore HOME
         if let Some(prev) = prev_home {
-            unsafe { env::set_var("HOME", prev); }
+            unsafe {
+                env::set_var("HOME", prev);
+            }
         } else {
-            unsafe { env::remove_var("HOME"); }
+            unsafe {
+                env::remove_var("HOME");
+            }
         }
     }
-
 
     #[test]
     fn config_input_list_contains_expected_defaults() {

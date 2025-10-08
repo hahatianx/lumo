@@ -1,5 +1,5 @@
-use std::net::IpAddr;
 use serde::Deserialize;
+use std::net::IpAddr;
 
 struct KeySpec {
     private_key_location: String,
@@ -7,31 +7,21 @@ struct KeySpec {
 }
 
 struct Identity {
-
     machine_name: String,
     mac_addr: String,
 
     key_spec: KeySpec,
-
 }
 
 struct ConnectionConfig {
-
     conn_token: String,
     port: u16,
     ip_addr: IpAddr,
-
 }
 
 #[derive(Deserialize)]
-struct AppConfig {
-
-
-
-}
+struct AppConfig {}
 
 struct EnvVar {
-
     identity: Identity,
-
 }
