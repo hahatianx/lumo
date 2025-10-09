@@ -8,29 +8,29 @@ use std::path::Path;
 use structopt::lazy_static::lazy_static;
 
 #[derive(Serialize, Deserialize, Debug)]
-struct Identity {
-    machine_name: String,
+pub struct Identity {
+    pub machine_name: String,
 
-    private_key_loc: String,
-    public_key_loc: String,
+    pub private_key_loc: String,
+    pub public_key_loc: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct Connection {
-    conn_token: String,
-    port: u16,
+pub struct Connection {
+    pub conn_token: String,
+    pub port: u16,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct AppConfig {
-    working_dir: String,
+pub struct AppConfig {
+    pub working_dir: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
-    identity: Identity,
-    connection: Connection,
-    app_config: AppConfig,
+    pub identity: Identity,
+    pub connection: Connection,
+    pub app_config: AppConfig,
 }
 
 impl Config {

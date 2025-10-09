@@ -1,12 +1,15 @@
-use crate::config::{Opts, get_or_create_config};
+use crate::config::Config;
+use crate::config::{EnvVar, Opts, get_or_create_config};
+use crate::global_var::{ENV_VAR, GlobalVar, LOGGER};
+use crate::utilities::init_file_logger;
 use err::Result;
-use crate::network::get_private_ipv4_with_mac;
 
 mod config;
 mod err;
-mod utilities;
 mod fs;
+mod global_var;
 mod network;
+mod utilities;
 
 fn print_version_and_exit() -> ! {
     // These are set by build.rs; fall back to unknown if missing
@@ -21,7 +24,7 @@ fn print_version_and_exit() -> ! {
     std::process::exit(0)
 }
 
-fn init() -> Result<()> {
+async fn init(config: &Config) -> GlobalVar {
     // Start server initialization
     // 1. Read config
     //   1.0. Test config validation
@@ -34,13 +37,26 @@ fn init() -> Result<()> {
     // 3. Set up network initialization
     // 4. File system initialization
 
+    // panic on failures
 
-    Ok(())
+    let env_var = EnvVar::from_config(config).expect("Failed to set environment variables");
+
+    let (logger, logger_handle) = init_file_logger(&config.app_config.working_dir)
+        .await
+        .expect("Failed to initialize logger");
+
+    ENV_VAR
+        .set(env_var)
+        .expect("Environment variable already set");
+    LOGGER.set(logger).expect("Logger already set");
+
+    let global_var = GlobalVar { logger_handle };
+
+    global_var
 }
 
 #[tokio::main]
 async fn main() {
-
     let opts = Opts::from_args();
 
     if opts.version {
@@ -57,10 +73,10 @@ async fn main() {
     match get_or_create_config(cfg_path_opt) {
         Ok(config) => {
             dbg!(&config);
+            init(&config).await;
         }
         Err(e) => {
-            eprintln!("Failed to load or create configuration: {}", e);
-            std::process::exit(1);
+            panic!("Failed to load or create configuration: {}", e);
         }
     }
 }

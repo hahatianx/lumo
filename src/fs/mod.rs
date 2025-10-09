@@ -1,11 +1,11 @@
 mod util;
 
 use crate::err::Result;
-use crate::utilities::init_file_logger;
-use std::path::{Path, PathBuf};
-use std::fs;
-use tokio::task::JoinHandle;
 use crate::utilities::AsyncLogger;
+use crate::utilities::init_file_logger;
+use std::fs;
+use std::path::{Path, PathBuf};
+use tokio::task::JoinHandle;
 
 /// Initialize filesystem-related resources under the given `path`.
 ///
@@ -24,8 +24,12 @@ pub async fn init_fs<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, JoinHandle
     if !(perms.read && perms.write && perms.execute) {
         return Err(format!(
             "Insufficient permissions for path '{}': read={}, write={}, execute={}",
-            base.display(), perms.read, perms.write, perms.execute
-        ).into());
+            base.display(),
+            perms.read,
+            perms.write,
+            perms.execute
+        )
+        .into());
     }
 
     // 2. Get or create .disc directory.

@@ -31,7 +31,11 @@ pub struct DirPermissions {
 impl DirPermissions {
     /// Convenience: all permissions are granted.
     pub const fn all() -> Self {
-        Self { read: true, write: true, execute: true }
+        Self {
+            read: true,
+            write: true,
+            execute: true,
+        }
     }
 }
 
@@ -46,7 +50,13 @@ pub fn check_dir_permissions<P: AsRef<Path>>(dir: P) -> DirPermissions {
     // Must exist and be a directory; otherwise, everything is false.
     match fs::metadata(dir) {
         Ok(md) if md.is_dir() => {}
-        _ => return DirPermissions { read: false, write: false, execute: false },
+        _ => {
+            return DirPermissions {
+                read: false,
+                write: false,
+                execute: false,
+            };
+        }
     }
 
     // READ: attempt to open the directory for reading its entries.
@@ -59,7 +69,11 @@ pub fn check_dir_permissions<P: AsRef<Path>>(dir: P) -> DirPermissions {
     // WRITE: attempt to create and then remove a unique temporary file inside the directory.
     let write_ok = try_create_ephemeral_file(dir).unwrap_or(false);
 
-    DirPermissions { read: read_ok, write: write_ok, execute: exec_ok }
+    DirPermissions {
+        read: read_ok,
+        write: write_ok,
+        execute: exec_ok,
+    }
 }
 
 fn try_create_ephemeral_file(dir: &Path) -> io::Result<bool> {
@@ -92,7 +106,11 @@ fn try_create_ephemeral_file(dir: &Path) -> io::Result<bool> {
             // If file already exists (very unlikely), try with a random suffix once more.
             if e.kind() == io::ErrorKind::AlreadyExists {
                 let alt = path.with_extension("alt.tmp");
-                match fs::OpenOptions::new().write(true).create_new(true).open(&alt) {
+                match fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&alt)
+                {
                     Ok(f2) => {
                         drop(f2);
                         let _ = fs::remove_file(&alt);
@@ -116,6 +134,9 @@ mod tests {
         let perms = check_dir_permissions(".");
         // We expect at least execute (traverse) to be true for the current working directory
         // in typical test environments. Read and write may vary; don't assert them strictly.
-        assert!(perms.execute, "Expected to be able to traverse current directory");
+        assert!(
+            perms.execute,
+            "Expected to be able to traverse current directory"
+        );
     }
 }

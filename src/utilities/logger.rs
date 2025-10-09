@@ -30,6 +30,7 @@
 //! }
 //! ```
 
+use crate::err::Result;
 use std::fmt;
 use std::path::Path;
 use tokio::fs::OpenOptions;
@@ -61,7 +62,7 @@ impl fmt::Display for LogLevel {
 }
 
 /// A simple async logger handle. Cloning creates another sender handle.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AsyncLogger {
     tx: mpsc::Sender<LogRecord>,
 }
@@ -120,9 +121,7 @@ impl LogRecord {
 
 /// Initialize a file-based async logger. Returns the logger handle and the background task handle.
 /// Dropping the last logger handle will close the channel and allow the task to shut down.
-pub async fn init_file_logger<P: AsRef<Path>>(
-    path: P,
-) -> std::io::Result<(AsyncLogger, JoinHandle<()>)> {
+pub async fn init_file_logger<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, JoinHandle<()>)> {
     // Keep a copy of the path so we can reopen the file if a writing error occurs.
     let path_buf = path.as_ref().to_path_buf();
 

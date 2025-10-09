@@ -1,9 +1,9 @@
 //! Network utilities.
-//! 
+//!
 //! Provides a cross-platform helper to discover a private (RFC1918) IPv4 address
 //! of the current machine. If multiple interfaces exist, any one private IPv4 may
 //! be returned. If no private IPv4 address can be inferred, `None` is returned.
-//! 
+//!
 //! This implementation avoids external dependencies and should work on Linux,
 //! macOS, and Windows.
 
@@ -27,7 +27,9 @@ pub fn get_private_ipv4_with_mac() -> Option<(Ipv4Addr, [u8; 6])> {
                 // Check IPv4 addresses on this interface
                 for ipnet in &iface.ips {
                     if let std::net::IpAddr::V4(v4) = ipnet.ip() {
-                        if v4.is_loopback() { continue; }
+                        if v4.is_loopback() {
+                            continue;
+                        }
                         if is_private_ipv4(&v4) {
                             return Some((v4, mac.octets()));
                         }
@@ -40,8 +42,12 @@ pub fn get_private_ipv4_with_mac() -> Option<(Ipv4Addr, [u8; 6])> {
         let fallback_ip = ifaces.iter().find_map(|iface| {
             for ipnet in &iface.ips {
                 if let std::net::IpAddr::V4(v4) = ipnet.ip() {
-                    if v4.is_loopback() { continue; }
-                    if is_private_ipv4(&v4) { return Some(v4); }
+                    if v4.is_loopback() {
+                        continue;
+                    }
+                    if is_private_ipv4(&v4) {
+                        return Some(v4);
+                    }
                 }
             }
             None
@@ -52,7 +58,9 @@ pub fn get_private_ipv4_with_mac() -> Option<(Ipv4Addr, [u8; 6])> {
                 if let Some(mac) = iface.mac {
                     for ipnet in &iface.ips {
                         if let std::net::IpAddr::V4(v4) = ipnet.ip() {
-                            if v4 == ip { return Some((ip, mac.octets())); }
+                            if v4 == ip {
+                                return Some((ip, mac.octets()));
+                            }
                         }
                     }
                 }
@@ -134,9 +142,9 @@ pub fn get_private_ipv4() -> Option<Ipv4Addr> {
 pub fn is_private_ipv4(ip: &Ipv4Addr) -> bool {
     let octets = ip.octets();
     match octets {
-        [10, _, _, _] => true,                                 // 10.0.0.0/8
-        [172, b, _, _] if (16..=31).contains(&b) => true,      // 172.16.0.0/12
-        [192, 168, _, _] => true,                              // 192.168.0.0/16
+        [10, _, _, _] => true,                            // 10.0.0.0/8
+        [172, b, _, _] if (16..=31).contains(&b) => true, // 172.16.0.0/12
+        [192, 168, _, _] => true,                         // 192.168.0.0/16
         _ => false,
     }
 }
@@ -151,7 +159,11 @@ mod tests {
         assert!(is_private_ipv4(&Ipv4Addr::new(10, 255, 255, 254)));
 
         for b in 16..=31 {
-            assert!(is_private_ipv4(&Ipv4Addr::new(172, b, 0, 1)), "172.{}.0.1 should be private", b);
+            assert!(
+                is_private_ipv4(&Ipv4Addr::new(172, b, 0, 1)),
+                "172.{}.0.1 should be private",
+                b
+            );
         }
         assert!(!is_private_ipv4(&Ipv4Addr::new(172, 15, 0, 1)));
         assert!(!is_private_ipv4(&Ipv4Addr::new(172, 32, 0, 1)));
@@ -160,7 +172,7 @@ mod tests {
 
         assert!(!is_private_ipv4(&Ipv4Addr::new(127, 0, 0, 1))); // loopback
         assert!(!is_private_ipv4(&Ipv4Addr::new(100, 64, 0, 1))); // CGNAT (100.64/10) not RFC1918
-        assert!(!is_private_ipv4(&Ipv4Addr::new(8, 8, 8, 8)));   // public
+        assert!(!is_private_ipv4(&Ipv4Addr::new(8, 8, 8, 8))); // public
     }
 
     #[test]
