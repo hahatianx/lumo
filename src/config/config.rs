@@ -22,7 +22,9 @@ struct Connection {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct AppConfig {}
+struct AppConfig {
+    working_dir: String,
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
@@ -43,7 +45,9 @@ impl Config {
                 conn_token: String::from(""),
                 port: 0,
             },
-            app_config: AppConfig {},
+            app_config: AppConfig {
+                working_dir: String::from(""),
+            },
         }
     }
 
@@ -176,6 +180,12 @@ lazy_static! {
             description: String::from("Set a port number for the server to listen on"),
             default: Some(ConfigInputValue::Uint(14514)),
         },
+        ConfigInput {
+            name: String::from("working_dir"),
+            pattern: String::from(r"^[-0-9a-zA-Z_/.\\]+$"),
+            description: String::from("Set a working directory of the shared disc"),
+            default: None,
+        }
     );
 }
 
@@ -226,6 +236,7 @@ pub fn interactive_config_setup(default_config_path: &str) -> Result<Config> {
     config.identity.machine_name = input_map.remove("machine_name").unwrap();
     config.identity.private_key_loc = input_map.remove("private_key_location").unwrap();
     config.identity.public_key_loc = input_map.remove("public_key_location").unwrap();
+    config.app_config.working_dir = input_map.remove("working_dir").unwrap();
     config.connection.conn_token = input_map.remove("conn_token").unwrap();
     config.connection.port = input_map
         .remove("port_number")
@@ -250,14 +261,14 @@ pub fn interactive_config_setup(default_config_path: &str) -> Result<Config> {
 }
 
 pub fn get_or_create_config(config_path: Option<&str>) -> Result<Config> {
-    if let Ok(config) = Config::from_config(config_path) {
-        Ok(config)
-    } else {
-        // If stdin is not a TTY, avoid entering interactive mode and return an error.
-        if !std::io::stdin().is_terminal() {
-            return Err("No configuration file found and stdin is not a TTY; run in a terminal to create a config or provide --config pointing to a valid file.".into());
+    match Config::from_config(config_path) {
+        Ok(config) => Ok(config),
+        Err(e) => {
+            if !std::io::stdin().is_terminal() {
+                return Err("No configuration file found and stdin is not a TTY; run in a terminal to create a config or provide --config pointing to a valid file.".into());
+            }
+            interactive_config_setup(config_path.unwrap())
         }
-        interactive_config_setup(config_path.unwrap())
     }
 }
 

@@ -236,6 +236,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipnetwork"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf466541e9d546596ee94f9f69590f89473455f88372423e0008fc1a7daf100e"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.81"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -299,6 +308,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "no-std-net"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43794a0ace135be66a25d3ae77d41b91615fb68ae937f904090203e81f755b65"
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -350,6 +365,38 @@ name = "pin-project-lite"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b3cff922bd51709b605d9ead9aa71031d81447142d828eb4a6eba76fe619f9b"
+
+[[package]]
+name = "pnet_base"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe4cf6fb3ab38b68d01ab2aea03ed3d1132b4868fa4e06285f29f16da01c5f4c"
+dependencies = [
+ "no-std-net",
+]
+
+[[package]]
+name = "pnet_datalink"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad5854abf0067ebbd3967f7d45ebc8976ff577ff0c7bd101c4973ae3c70f98fe"
+dependencies = [
+ "ipnetwork",
+ "libc",
+ "pnet_base",
+ "pnet_sys",
+ "winapi",
+]
+
+[[package]]
+name = "pnet_sys"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "417c0becd1b573f6d544f73671070b039051e5ad819cc64aa96377b536128d00"
+dependencies = [
+ "libc",
+ "winapi",
+]
 
 [[package]]
 name = "proc-macro-error"
@@ -493,6 +540,7 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "pnet_datalink",
  "regex",
  "serde",
  "structopt",

@@ -1,7 +1,12 @@
 use crate::config::{Opts, get_or_create_config};
+use err::Result;
+use crate::network::get_private_ipv4_with_mac;
 
 mod config;
 mod err;
+mod utilities;
+mod fs;
+mod network;
 
 fn print_version_and_exit() -> ! {
     // These are set by build.rs; fall back to unknown if missing
@@ -16,8 +21,26 @@ fn print_version_and_exit() -> ! {
     std::process::exit(0)
 }
 
+fn init() -> Result<()> {
+    // Start server initialization
+    // 1. Read config
+    //   1.0. Test config validation
+    //   1.1. Set up environment variables
+    // 2. Set up a working directory
+    //   2.0. Test directory permissions READ | WRITE | EXECUTE
+    //   2.1. Fail if working the directory does not exist
+    //   2.2. Get or create .server directory
+    //   2.3. Set up external logger
+    // 3. Set up network initialization
+    // 4. File system initialization
+
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
+
     let opts = Opts::from_args();
 
     if opts.version {
