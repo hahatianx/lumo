@@ -1,8 +1,7 @@
 use crate::config::Config;
 use crate::config::{EnvVar, Opts, get_or_create_config};
+use crate::fs::init_fs;
 use crate::global_var::{ENV_VAR, GlobalVar, LOGGER};
-use crate::utilities::init_file_logger;
-use err::Result;
 
 mod config;
 mod err;
@@ -32,7 +31,7 @@ async fn init(config: &Config) -> GlobalVar {
     // 2. Set up a working directory
     //   2.0. Test directory permissions READ | WRITE | EXECUTE
     //   2.1. Fail if working the directory does not exist
-    //   2.2. Get or create .server directory
+    //   2.2. Get or create .server director
     //   2.3. Set up external logger
     // 3. Set up network initialization
     // 4. File system initialization
@@ -41,7 +40,7 @@ async fn init(config: &Config) -> GlobalVar {
 
     let env_var = EnvVar::from_config(config).expect("Failed to set environment variables");
 
-    let (logger, logger_handle) = init_file_logger(&config.app_config.working_dir)
+    let (logger, logger_handle) = init_fs(env_var.get_working_dir())
         .await
         .expect("Failed to initialize logger");
 
@@ -74,6 +73,7 @@ async fn main() {
         Ok(config) => {
             dbg!(&config);
             init(&config).await;
+            dbg!(ENV_VAR.get().unwrap());
         }
         Err(e) => {
             panic!("Failed to load or create configuration: {}", e);

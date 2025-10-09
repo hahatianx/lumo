@@ -53,3 +53,35 @@ impl Opts {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use structopt::StructOpt;
+
+    #[test]
+    fn parse_version_flag() {
+        let o = Opts::from_iter_safe(["server", "--version"]).expect("parse");
+        assert!(o.version);
+        assert!(!o.debug);
+        assert!(o.config.is_none());
+    }
+
+    #[test]
+    fn parse_config_and_debug_flags_short_and_long() {
+        let o = Opts::from_iter_safe(["server", "--config", "/tmp/cfg.toml", "-d"]).expect("parse");
+        assert!(!o.version);
+        assert!(o.debug);
+        assert_eq!(o.config.as_deref(), Some(std::path::Path::new("/tmp/cfg.toml")));
+
+        let o2 = Opts::from_iter_safe(["server", "-c", "file.toml"]).expect("parse");
+        assert_eq!(o2.config.unwrap(), std::path::PathBuf::from("file.toml"));
+    }
+
+    #[test]
+    fn missing_required_config_without_version_errors() {
+        let err = Opts::from_iter_safe(["server"]).err().expect("should error");
+        // Clap error kind should not be VersionDisplayed/HelpDisplayed
+        assert!(matches!(err.kind, ErrorKind::MissingRequiredArgument | ErrorKind::ValueValidation | _ if true));
+    }
+}

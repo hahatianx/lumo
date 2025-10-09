@@ -1,2 +1,5 @@
 /target
 .idea/
+server_config.toml
+CHANGELOG.md
+tarpaulin-report.html

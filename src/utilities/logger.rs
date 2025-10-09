@@ -268,6 +268,7 @@ mod chrono_like {
 #[cfg(test)]
 mod tests {
     use super::{LogLevel, init_file_logger};
+    use super::{LogRecord, chrono_like};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -319,6 +320,33 @@ mod tests {
         );
 
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_log_level_display_strings() {
+        assert_eq!(format!("{}", LogLevel::Trace), "TRACE");
+        assert_eq!(format!("{}", LogLevel::Debug), "DEBUG");
+        assert_eq!(format!("{}", LogLevel::Info), "INFO");
+        assert_eq!(format!("{}", LogLevel::Warn), "WARN");
+        assert_eq!(format!("{}", LogLevel::Error), "ERROR");
+    }
+
+    #[test]
+    fn test_format_line_with_fixed_timestamp() {
+        // Fixed at Unix epoch to make the output deterministic
+        let rec = LogRecord { level: LogLevel::Debug, msg: "xyz".into(), ts_millis: 0 };
+        let line = rec.format_line();
+        assert!(line.contains("[DEBUG]"));
+        assert!(line.contains("xyz"));
+        assert!(line.contains("1970-01-01"));
+        assert!(line.contains('T'));
+        assert!(line.contains('Z'));
+        assert!(line.ends_with('\n'));
+
+        // Also directly test the splitter
+        let (d, t) = chrono_like::split_iso8601(0);
+        assert_eq!(d, "1970-01-01");
+        assert!(t.starts_with("00:00:00."));
     }
 
     #[tokio::test]

@@ -1,4 +1,5 @@
 use crate::err::Result;
+use crate::fs::util::expand_tilde;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap as Map;
@@ -54,15 +55,8 @@ impl Config {
     pub fn from_config(config_path: Option<&str>) -> Result<Self> {
         match config_path {
             Some(p) => {
-                // Expand leading '~/'' HOME to support shell-like paths in config defaults
-                let path = if p.starts_with("~/") {
-                    match std::env::var("HOME") {
-                        Ok(home) => format!("{}/{}", home, &p[2..]),
-                        Err(_) => p.to_string(),
-                    }
-                } else {
-                    p.to_string()
-                };
+                // Expand leading '~/'' to HOME to support shell-like paths in config defaults
+                let path = expand_tilde(p);
                 let content = fs::read_to_string(&path)?;
                 match toml::from_str(&content) {
                     Ok(config) => Ok(config),
@@ -156,13 +150,13 @@ lazy_static! {
         },
         ConfigInput {
             name: String::from("private_key_location"),
-            pattern: String::from(r"^[-0-9a-zA-Z_/.\\]+$"),
+            pattern: String::from(r"^[-0-9a-zA-Z_/.~\\]+$"),
             description: String::from("Please input your private key location"),
             default: None,
         },
         ConfigInput {
             name: String::from("public_key_location"),
-            pattern: String::from(r"^[-0-9a-zA-Z_/.\\]+$"),
+            pattern: String::from(r"^[-0-9a-zA-Z_/.~\\]+$"),
             description: String::from("Please input your public key location"),
             default: None,
         },
@@ -182,7 +176,7 @@ lazy_static! {
         },
         ConfigInput {
             name: String::from("working_dir"),
-            pattern: String::from(r"^[-0-9a-zA-Z_/.\\]+$"),
+            pattern: String::from(r"^[-0-9a-zA-Z_/.~\\]+$"),
             description: String::from("Set a working directory of the shared disc"),
             default: None,
         }
@@ -207,6 +201,7 @@ fn read_input(required_input: &ConfigInput) -> Result<(String, String)> {
         }
         print!("{}", required_input.to_error_msg(&input));
         std::io::stdout().flush()?;
+        input.clear();
         std::io::stdin().read_line(&mut input)?;
         input = input.trim().to_string();
     }
@@ -226,7 +221,7 @@ pub fn interactive_config_setup(default_config_path: &str) -> Result<Config> {
     // last question: where do you want to store this config?
     let config_file_input = ConfigInput {
         name: String::from("config_path"),
-        pattern: String::from(r"^[0-9a-zA-Z_/.-\\]+$"),
+        pattern: String::from(r"^[-0-9a-zA-Z_/.~\\]+$"),
         description: String::from("Where do you want to store this config"),
         default: Some(ConfigInputValue::String(String::from(default_config_path))),
     };
@@ -234,8 +229,10 @@ pub fn interactive_config_setup(default_config_path: &str) -> Result<Config> {
     input_map.insert(name, input);
 
     config.identity.machine_name = input_map.remove("machine_name").unwrap();
-    config.identity.private_key_loc = input_map.remove("private_key_location").unwrap();
-    config.identity.public_key_loc = input_map.remove("public_key_location").unwrap();
+    config.identity.private_key_loc =
+        input_map.remove("private_key_location").unwrap();
+    config.identity.public_key_loc =
+        input_map.remove("public_key_location").unwrap();
     config.app_config.working_dir = input_map.remove("working_dir").unwrap();
     config.connection.conn_token = input_map.remove("conn_token").unwrap();
     config.connection.port = input_map
@@ -244,15 +241,7 @@ pub fn interactive_config_setup(default_config_path: &str) -> Result<Config> {
         .parse::<u16>()
         .unwrap();
 
-    let save_path_input = input_map.remove("config_path").unwrap();
-    let save_path = if save_path_input.starts_with("~/") {
-        match &std::env::var("HOME") {
-            Ok(home) => format!("{}/{}", home, &save_path_input[2..]),
-            Err(_) => save_path_input,
-        }
-    } else {
-        save_path_input
-    };
+    let save_path = expand_tilde(&input_map.remove("config_path").unwrap());
 
     // Persist the configuration as TOML. Parent directories are created in dump().
     config.dump(&save_path)?;
@@ -386,6 +375,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn from_config_expands_tilde_with_home() {
         // Prepare a temporary HOME
         let tmp_home = unique_temp_path("home_root");

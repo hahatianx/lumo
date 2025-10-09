@@ -125,9 +125,37 @@ fn try_create_ephemeral_file(dir: &Path) -> io::Result<bool> {
     }
 }
 
+pub fn expand_tilde(path: &str) -> String {
+    // Expand leading "~/" to $HOME, and handle "~" alone. Leave other forms unchanged.
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            // Preserve exact formatting semantics used in tests: `${HOME}/${rest}`
+            // This intentionally does not normalize duplicate slashes, so if HOME ends with
+            // a trailing slash, the resulting path may contain a double slash, matching
+            // expectations like `format!("{}/{}", home, rest)`.
+            return format!("{}/{}", home, rest);
+        }
+        // If HOME is not set, leave the original path unchanged.
+        return path.to_string();
+    }
+    if path == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            return home;
+        }
+        return path.to_string();
+    }
+    path.to_string()
+}
+
+pub fn test_dir_existence<P: AsRef<Path>>(dir: P) -> bool {
+    dir.as_ref().exists() && dir.as_ref().is_dir()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::env;
 
     #[test]
     fn check_current_dir_permissions() {
@@ -138,5 +166,124 @@ mod tests {
             perms.execute,
             "Expected to be able to traverse current directory"
         );
+    }
+
+    #[test]
+    fn check_permissions_nonexistent_dir_all_false() {
+        let mut p = std::env::temp_dir();
+        p.push(format!("no_such_dir_{}_{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()));
+        if p.exists() { let _ = std::fs::remove_dir_all(&p); }
+        let perms = check_dir_permissions(&p);
+        assert!(!perms.read && !perms.write && !perms.execute);
+    }
+
+    #[test]
+    fn check_permissions_writable_temp_dir_has_write() {
+        let mut p = std::env::temp_dir();
+        p.push(format!("perms_ok_{}_{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()));
+        std::fs::create_dir_all(&p).unwrap();
+        let perms = check_dir_permissions(&p);
+        assert!(perms.write, "Expected write permission in temp dir: {:?}", perms);
+        let _ = std::fs::remove_dir_all(&p);
+    }
+
+    #[test]
+    #[serial]
+    fn expand_tilde_expands_when_home_set() {
+        // Save current HOME
+        let original_home = env::var("HOME").ok();
+        let temp_home = "/tmp/junie_home_test";
+        unsafe {
+            env::set_var("HOME", temp_home);
+        }
+
+        let input = "~/sub/dir";
+        let resolved = expand_tilde(input);
+        assert_eq!(resolved, format!("{}/{}", temp_home, "sub/dir"));
+
+        // Restore HOME
+        match original_home {
+            Some(val) => unsafe {
+                env::set_var("HOME", val);
+            },
+            None => unsafe {
+                env::remove_var("HOME");
+            },
+        }
+    }
+
+    #[test]
+    fn expand_tilde_leaves_non_tilde_paths_unchanged() {
+        assert_eq!(expand_tilde("/absolute/path"), "/absolute/path");
+        assert_eq!(expand_tilde("relative/path"), "relative/path");
+        assert_eq!(expand_tilde("~not/home"), "~not/home");
+    }
+
+    #[test]
+    #[serial]
+    fn expand_tilde_unset_home_leaves_tilde_path() {
+        // Save and unset HOME
+        let original_home = env::var("HOME").ok();
+        unsafe {
+            env::remove_var("HOME");
+        }
+
+        let input = "~/file";
+        let resolved = expand_tilde(input);
+        // Without HOME, function should leave the path unchanged
+        assert_eq!(resolved, input);
+
+        // Restore HOME
+        match original_home {
+            Some(val) => unsafe {
+                env::set_var("HOME", val);
+            },
+            None => unsafe {
+                env::remove_var("HOME");
+            },
+        }
+    }
+
+    #[test]
+    fn test_dir_existence_true_for_current_dir() {
+        assert!(test_dir_existence("."));
+    }
+
+    #[test]
+    fn test_dir_existence_false_for_existing_file() {
+        // Create a temporary file inside the system temp directory
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "junie_exist_file_{}_{}.tmp",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
+        std::fs::write(&p, b"x").unwrap();
+        // test_dir_existence returns true only for directories, not files
+        assert!(!test_dir_existence(p.to_str().unwrap()));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn test_dir_existence_false_for_nonexistent_path() {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "junie_nonexistent_{}_{}.nope",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
+        // Ensure path does not exist
+        if p.exists() {
+            let _ = std::fs::remove_file(&p);
+        }
+        assert!(!test_dir_existence(p.to_str().unwrap()));
     }
 }
