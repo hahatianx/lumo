@@ -1,4 +1,5 @@
 use crate::err::Result;
+use crate::global_var::ENV_VAR;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -7,17 +8,16 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
-use crate::global_var::ENV_VAR;
 
-/// TcpSender provides two patterns for sending TCP requests using Tokio:
+/// NetworkSender provides two patterns for sending UDP requests using Tokio:
 /// - Queued single-consumer worker (default): provides backpressure, connection reuse, and ordering per destination.
 /// - Per-request spawned task: fire-and-forget style; useful for very low latency fan-out with lower coordination.
 ///
-/// By default, construct with `TcpSender::new_queue_worker` and call `send` to enqueue a request
-/// and await completion. You can also use `TcpSender::spawn_per_request` for ad-hoc sends.
+/// By default, construct with `NetworkSender::new_queue_worker` and call `send` to enqueue a request
+/// and await completion. You can also use `NetworkSender::spawn_per_request` for ad-hoc sends.
 pub struct NetworkSender {
     tx: mpsc::Sender<SendReq>,
-    _worker: JoinHandle<()>,
+    worker: JoinHandle<()>,
 }
 
 #[derive(Clone, Debug)]
@@ -41,13 +41,13 @@ impl Default for SenderConfig {
     }
 }
 
-struct SendReq {
-    addr: SocketAddr,
-    bytes: Bytes,
+enum SendReq {
+    Data { addr: SocketAddr, bytes: Bytes },
+    Shutdown,
 }
 
 impl NetworkSender {
-    /// Create a queued TcpSender with a single consumer worker.
+    /// Create a queued NetworkSender with a single consumer worker.
     /// This approach is generally preferable for:
     /// - Applying backpressure
     /// - Reusing connections per destination
@@ -60,22 +60,21 @@ impl NetworkSender {
             mpsc::channel(config.queue_bound)
         };
         let worker = tokio::spawn(run_worker(rx, config));
-        Self { tx, _worker: worker }
+        Self { tx, worker }
     }
 
     /// Enqueue a send operation and await its result.
     pub async fn send(&self, addr: SocketAddr, bytes: Bytes) -> Result<()> {
-        let req = SendReq { addr, bytes };
+        let req = SendReq::Data { addr, bytes };
         // If the channel is closed, report an error.
         if let Err(_e) = self.tx.send(req).await {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, "TcpSender worker task is not running").into());
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "NetworkSender worker task is not running",
+            )
+            .into());
         }
         Ok(())
-    }
-
-    /// Convenience to send owned Vec<u8> without converting at call site.
-    pub async fn send_vec(&self, addr: SocketAddr, bytes: Vec<u8>) -> Result<()> {
-        self.send(addr, Bytes::from(bytes)).await
     }
 
     /// Broadcast the same bytes to multiple addresses by enqueuing one send per address.
@@ -92,8 +91,22 @@ impl NetworkSender {
 
     /// Spawn a per-request task that connects and sends the bytes, returning a JoinHandle.
     /// Prefer this for very bursty fan-out where connection reuse is not critical.
-    pub fn spawn_per_request(addr: SocketAddr, bytes: Bytes, connect_timeout: Duration, write_timeout: Duration) -> JoinHandle<Result<()>> {
+    pub fn spawn_per_request(
+        addr: SocketAddr,
+        bytes: Bytes,
+        connect_timeout: Duration,
+        write_timeout: Duration,
+    ) -> JoinHandle<Result<()>> {
         tokio::spawn(async move { send_once(addr, bytes, connect_timeout, write_timeout).await })
+    }
+
+    /// Gracefully shutdown the queue worker by sending a Shutdown request and awaiting the worker task.
+    pub async fn shutdown(self) -> Result<()> {
+        // Ignore errors if the channel is already closed.
+        let _ = self.tx.send(SendReq::Shutdown).await;
+        // Await the worker to finish cleanup.
+        let _ = self.worker.await;
+        Ok(())
     }
 }
 
@@ -102,7 +115,11 @@ async fn bind_and_connect(addr: SocketAddr) -> std::io::Result<UdpSocket> {
     // - If destination is loopback, bind to the corresponding loopback IP to ensure local routing.
     // - Else, prefer the IP from EnvVar (if available and same family); otherwise fall back to unspecified for that family.
     let local_ip: IpAddr = if addr.ip().is_loopback() {
-        if addr.is_ipv4() { IpAddr::V4(Ipv4Addr::LOCALHOST) } else { IpAddr::V6(Ipv6Addr::LOCALHOST) }
+        if addr.is_ipv4() {
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        } else {
+            IpAddr::V6(Ipv6Addr::LOCALHOST)
+        }
     } else if let Some(ev) = ENV_VAR.get() {
         let ip = ev.get_ip_addr();
         match (ip, addr) {
@@ -113,7 +130,11 @@ async fn bind_and_connect(addr: SocketAddr) -> std::io::Result<UdpSocket> {
             (_, SocketAddr::V6(_)) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
         }
     } else {
-        if addr.is_ipv4() { IpAddr::V4(Ipv4Addr::UNSPECIFIED) } else { IpAddr::V6(Ipv6Addr::UNSPECIFIED) }
+        if addr.is_ipv4() {
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        } else {
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+        }
     };
 
     let local = SocketAddr::new(local_ip, 0);
@@ -132,47 +153,59 @@ async fn run_worker(mut rx: mpsc::Receiver<SendReq>, cfg: SenderConfig) {
     // Cache connected UDP sockets per addr for reuse.
     let mut conns: HashMap<SocketAddr, UdpSocket> = HashMap::new();
 
-    while let Some(SendReq { addr, bytes }) = rx.recv().await {
-        let res = async {
-            // Get or create a connected UDP socket
-            let sock = match conns.remove(&addr) {
-                Some(s) => s,
-                None => {
-                    let s = if cfg.connect_timeout.is_zero() {
-                        bind_and_connect(addr).await?
-                    } else {
-                        timeout(cfg.connect_timeout, bind_and_connect(addr))
-                            .await
-                            .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, format!("connect timeout to {}", addr)))??
+    while let Some(req) = rx.recv().await {
+        match req {
+            SendReq::Data { addr, bytes } => {
+                let _res = async {
+                    // Get or create a connected UDP socket
+                    let sock = match conns.remove(&addr) {
+                        Some(s) => s,
+                        None => {
+                            let s = if cfg.connect_timeout.is_zero() {
+                                bind_and_connect(addr).await?
+                            } else {
+                                timeout(cfg.connect_timeout, bind_and_connect(addr))
+                                    .await
+                                    .map_err(|_| {
+                                        std::io::Error::new(
+                                            std::io::ErrorKind::TimedOut,
+                                            format!("connect timeout to {}", addr),
+                                        )
+                                    })??
+                            };
+                            s
+                        }
                     };
-                    s
-                }
-            };
 
-            // Try to send; on failure, create a fresh socket once and retry.
-            match send_with_timeout(sock, &bytes, cfg.write_timeout).await {
-                Ok(s) => {
-                    // put back for reuse
-                    conns.insert(addr, s);
-                    Ok(())
+                    // Try to send; on failure, create a fresh socket once and retry.
+                    match send_with_timeout(sock, &bytes, cfg.write_timeout).await {
+                        Ok(s) => {
+                            // put back for reuse
+                            conns.insert(addr, s);
+                            Ok(())
+                        }
+                        Err(_e) => {
+                            // attempt single re-bind/connect
+                            let s = if cfg.connect_timeout.is_zero() {
+                                bind_and_connect(addr).await?
+                            } else {
+                                timeout(cfg.connect_timeout, bind_and_connect(addr))
+                                    .await
+                                    .map_err(|_| format!("reconnect timeout to {}", addr))??
+                            };
+                            let s = send_with_timeout(s, &bytes, cfg.write_timeout).await?;
+                            conns.insert(addr, s);
+                            Ok(())
+                        }
+                    }
                 }
-                Err(_e) => {
-                    // attempt single re-bind/connect
-                    let s = if cfg.connect_timeout.is_zero() {
-                        bind_and_connect(addr).await?
-                    } else {
-                        timeout(cfg.connect_timeout, bind_and_connect(addr))
-                            .await
-                            .map_err(|_| format!("reconnect timeout to {}", addr))??
-                    };
-                    let s = send_with_timeout(s, &bytes, cfg.write_timeout).await?;
-                    conns.insert(addr, s);
-                    Ok(())
-                }
+                .await
+                .map_err(|e: Box<dyn std::error::Error + Send + Sync>| e);
+            }
+            SendReq::Shutdown => {
+                break;
             }
         }
-        .await
-        .map_err(|e: Box<dyn std::error::Error + Send + Sync>| e);
     }
 
     // Clean up: let UdpSockets drop here.
@@ -188,13 +221,23 @@ async fn send_with_timeout(mut sock: UdpSocket, bytes: &Bytes, to: Duration) -> 
     Ok(sock)
 }
 
-async fn send_once(addr: SocketAddr, bytes: Bytes, connect_timeout: Duration, write_timeout: Duration) -> Result<()> {
+async fn send_once(
+    addr: SocketAddr,
+    bytes: Bytes,
+    connect_timeout: Duration,
+    write_timeout: Duration,
+) -> Result<()> {
     let sock = if connect_timeout.is_zero() {
         bind_and_connect(addr).await?
     } else {
         timeout(connect_timeout, bind_and_connect(addr))
             .await
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, format!("connect timeout to {}", addr)))??
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("connect timeout to {}", addr),
+                )
+            })??
     };
     let _ = send_with_timeout(sock, &bytes, write_timeout).await?;
     Ok(())
@@ -214,10 +257,14 @@ mod tests {
         let (tx, rx) = oneshot::channel::<Bytes>();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 64];
-            let _ = server.recv_from(&mut buf).await.map(|(n, _)| {
-                buf.truncate(n);
-                buf
-            }).map(|b| tx.send(Bytes::from(b)));
+            let _ = server
+                .recv_from(&mut buf)
+                .await
+                .map(|(n, _)| {
+                    buf.truncate(n);
+                    buf
+                })
+                .map(|b| tx.send(Bytes::from(b)));
         });
 
         let sender = NetworkSender::new_queue_worker(SenderConfig::default());
@@ -234,10 +281,14 @@ mod tests {
         let (tx, rx) = oneshot::channel::<Bytes>();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 64];
-            let _ = server.recv_from(&mut buf).await.map(|(n, _)| {
-                buf.truncate(n);
-                buf
-            }).map(|b| tx.send(Bytes::from(b)));
+            let _ = server
+                .recv_from(&mut buf)
+                .await
+                .map(|(n, _)| {
+                    buf.truncate(n);
+                    buf
+                })
+                .map(|b| tx.send(Bytes::from(b)));
         });
 
         let handle = NetworkSender::spawn_per_request(
@@ -268,5 +319,4 @@ mod tests {
         sender.broadcast(payload.clone()).await?;
         Ok(())
     }
-
 }

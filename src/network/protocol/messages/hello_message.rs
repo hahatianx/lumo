@@ -65,11 +65,7 @@ impl Protocol for HelloMessage {
                 .into());
             }
             None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "no tokens found",
-                )
-                .into());
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "no tokens found").into());
             }
         }
 
@@ -83,11 +79,9 @@ impl Protocol for HelloMessage {
                 .into());
             }
             None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "missing from_ip token",
-                )
-                .into());
+                return Err(
+                    io::Error::new(io::ErrorKind::UnexpectedEof, "missing from_ip token").into(),
+                );
             }
         };
 
@@ -147,11 +141,9 @@ impl Protocol for HelloMessage {
                 .into());
             }
             None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "missing mac_addr token",
-                )
-                .into());
+                return Err(
+                    io::Error::new(io::ErrorKind::UnexpectedEof, "missing mac_addr token").into(),
+                );
             }
         };
 
@@ -175,11 +167,9 @@ impl Protocol for HelloMessage {
                 .into());
             }
             None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "missing mode token",
-                )
-                .into());
+                return Err(
+                    io::Error::new(io::ErrorKind::UnexpectedEof, "missing mode token").into(),
+                );
             }
         };
 
@@ -231,7 +221,7 @@ impl Protocol for HelloMessage {
                     io::ErrorKind::InvalidData,
                     format!("expected Simple for from_ip, got {:?}", other),
                 )
-                .into())
+                .into());
             }
         };
         let from_port = match &tokens[2] {
@@ -250,7 +240,7 @@ impl Protocol for HelloMessage {
                     io::ErrorKind::InvalidData,
                     format!("expected Integer for from_port, got {:?}", other),
                 )
-                .into())
+                .into());
             }
         };
         let from_name = match &tokens[3] {
@@ -260,7 +250,7 @@ impl Protocol for HelloMessage {
                     io::ErrorKind::InvalidData,
                     format!("expected Simple for from_name, got {:?}", other),
                 )
-                .into())
+                .into());
             }
         };
         let mac_addr = match &tokens[4] {
@@ -270,7 +260,7 @@ impl Protocol for HelloMessage {
                     io::ErrorKind::InvalidData,
                     format!("expected Simple for mac_addr, got {:?}", other),
                 )
-                .into())
+                .into());
             }
         };
         let mode = match &tokens[5] {
@@ -289,7 +279,7 @@ impl Protocol for HelloMessage {
                     io::ErrorKind::InvalidData,
                     format!("expected Integer for mode, got {:?}", other),
                 )
-                .into())
+                .into());
             }
         };
         Ok(HelloMessage {
@@ -398,8 +388,7 @@ mod tests {
     #[test]
     fn deserialize_rejects_extra_tokens() -> crate::err::Result<()> {
         // Create valid hello bytes
-        let mut bytes = msg()
-            .serialize();
+        let mut bytes = msg().serialize();
         // Append one extra token
         let extra = Token::Simple("EXTRA".into()).to_bytes();
         bytes.extend_from_slice(&extra);
