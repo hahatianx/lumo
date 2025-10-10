@@ -32,11 +32,13 @@
 
 use crate::err::Result;
 use std::fmt;
+use std::ops::Deref;
 use std::path::Path;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use crate::global_var::LOGGER_CELL;
 
 /// Log level for messages.
 #[derive(Clone, Copy, Debug)]
@@ -70,7 +72,18 @@ pub struct AsyncLogger {
 impl AsyncLogger {
     /// Log a message at a specific level.
     fn log<S: Into<String>>(&self, level: LogLevel, msg: S) {
-        let _ = self.tx.try_send(LogRecord::new(level, msg.into()));
+        match self.tx.try_send(LogRecord::new(level, msg.into())) {
+            Ok(_) => {}
+            Err(err) => {
+                eprintln!("Failed to send log message: {}", err);
+            }
+        }
+    }
+
+    /// Request the logger task to flush and shut down.
+    pub async fn shutdown(&self) {
+        // Ignore send error (e.g., task already closed)
+        let _ = self.tx.send(LogRecord::Shutdown).await;
     }
 
     pub fn trace<S: Into<String>>(&self, msg: S) {
@@ -91,31 +104,35 @@ impl AsyncLogger {
 }
 
 #[derive(Debug)]
-struct LogRecord {
-    level: LogLevel,
-    msg: String,
-    ts_millis: i128,
+enum LogRecord {
+    Message {
+        level: LogLevel,
+        msg: String,
+        ts_millis: i128,
+    },
+    Shutdown,
 }
 
 impl LogRecord {
     fn new(level: LogLevel, msg: String) -> Self {
         let ts_millis = chrono_like::now_millis();
-        Self {
-            level,
-            msg,
-            ts_millis,
-        }
+        Self::Message { level, msg, ts_millis }
     }
 
-    fn format_line(&self) -> String {
-        // Format: 2025-10-08T21:22:33.123Z [LEVEL] message\n
-        let (date, time_millis) = chrono_like::split_iso8601(self.ts_millis);
-        format!(
-            "{}Z [{}] {}\n",
-            format!("{}T{}", date, time_millis),
-            self.level,
-            self.msg
-        )
+    fn format_line(&self) -> Option<String> {
+        match self {
+            LogRecord::Message { level, msg, ts_millis } => {
+                // Format: 2025-10-08T21:22:33.123Z [LEVEL] message\n
+                let (date, time_millis) = chrono_like::split_iso8601(*ts_millis);
+                Some(format!(
+                    "{}Z [{}] {}\n",
+                    format!("{}T{}", date, time_millis),
+                    level,
+                    msg
+                ))
+            }
+            LogRecord::Shutdown => None,
+        }
     }
 }
 
@@ -136,25 +153,33 @@ pub async fn init_file_logger<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, J
 
     let task = tokio::spawn(async move {
         while let Some(rec) = rx.recv().await {
-            let line = rec.format_line();
-            if let Err(_e) = writer.write_all(line.as_bytes()).await {
-                // Attempt to recover: flush, reopen the file, swap the writer, and retry once.
-                let _ = writer.flush().await;
-                match OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path_buf)
-                    .await
-                {
-                    Ok(new_file) => {
-                        writer = BufWriter::new(new_file);
-                        // Best-effort: try to write the original line again; if it fails, drop it.
-                        let _ = writer.write_all(line.as_bytes()).await;
+            match rec {
+                LogRecord::Message { .. } => {
+                    if let Some(line) = rec.format_line() {
+                        if let Err(_e) = writer.write_all(line.as_bytes()).await {
+                            // Attempt to recover: flush, reopen the file, swap the writer, and retry once.
+                            let _ = writer.flush().await;
+                            match OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&path_buf)
+                                .await
+                            {
+                                Ok(new_file) => {
+                                    writer = BufWriter::new(new_file);
+                                    // Best-effort: try to write the original line again; if it fails, drop it.
+                                    let _ = writer.write_all(line.as_bytes()).await;
+                                }
+                                Err(_) => {
+                                    // Couldn't reopen. Drop the message and avoid tight loop.
+                                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                                }
+                            }
+                        }
                     }
-                    Err(_) => {
-                        // Couldn't reopen. Drop the message and avoid tight loop.
-                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    }
+                }
+                LogRecord::Shutdown => {
+                    break;
                 }
             }
         }
@@ -163,6 +188,16 @@ pub async fn init_file_logger<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, J
     });
 
     Ok((AsyncLogger { tx }, task))
+}
+
+
+pub(crate) struct Logger;
+
+impl Deref for Logger {
+    type Target = AsyncLogger;
+    fn deref(&self) -> &Self::Target {
+        LOGGER_CELL.get().unwrap()
+    }
 }
 
 // A tiny, self-contained helper to avoid pulling chrono; build time is a best-effort.
@@ -334,8 +369,8 @@ mod tests {
     #[test]
     fn test_format_line_with_fixed_timestamp() {
         // Fixed at Unix epoch to make the output deterministic
-        let rec = LogRecord { level: LogLevel::Debug, msg: "xyz".into(), ts_millis: 0 };
-        let line = rec.format_line();
+        let rec = LogRecord::Message { level: LogLevel::Debug, msg: "xyz".into(), ts_millis: 0 };
+        let line = rec.format_line().expect("line should exist for Message");
         assert!(line.contains("[DEBUG]"));
         assert!(line.contains("xyz"));
         assert!(line.contains("1970-01-01"));

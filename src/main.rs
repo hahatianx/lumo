@@ -1,7 +1,8 @@
 use crate::config::Config;
 use crate::config::{EnvVar, Opts, get_or_create_config};
 use crate::fs::init_fs;
-use crate::global_var::{ENV_VAR, GlobalVar, LOGGER};
+use crate::global_var::{ENV_VAR, GlobalVar, LOGGER, GLOBAL_VAR, LOGGER_CELL};
+use crate::err::Result;
 
 mod config;
 mod err;
@@ -23,7 +24,7 @@ fn print_version_and_exit() -> ! {
     std::process::exit(0)
 }
 
-async fn init(config: &Config) -> GlobalVar {
+async fn init(config: &Config) -> Result<()> {
     // Start server initialization
     // 1. Read config
     //   1.0. Test config validation
@@ -47,11 +48,27 @@ async fn init(config: &Config) -> GlobalVar {
     ENV_VAR
         .set(env_var)
         .expect("Environment variable already set");
-    LOGGER.set(logger).expect("Logger already set");
+    LOGGER_CELL.set(logger).expect("Logger already set");
 
-    let global_var = GlobalVar { logger_handle };
+    let global_var = GlobalVar { logger_handle: tokio::sync::Mutex::new(Some(logger_handle)) };
 
-    global_var
+    GLOBAL_VAR.set(global_var).expect("Global variable already set");
+
+    Ok(())
+}
+
+async fn system_shutdown() {
+
+    LOGGER.info("System shutting down...");
+
+    // shutdown logger
+    LOGGER.shutdown().await;
+    if let Some(gv) = GLOBAL_VAR.get() {
+        if let Some(handle) = gv.logger_handle.lock().await.take() {
+            let _ = handle.await;
+        }
+    }
+
 }
 
 #[tokio::main]
@@ -72,11 +89,13 @@ async fn main() {
     match get_or_create_config(cfg_path_opt) {
         Ok(config) => {
             dbg!(&config);
-            init(&config).await;
+            init(&config).await.unwrap();
             dbg!(ENV_VAR.get().unwrap());
         }
         Err(e) => {
             panic!("Failed to load or create configuration: {}", e);
         }
     }
+
+    system_shutdown().await;
 }
