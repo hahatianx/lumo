@@ -1,8 +1,8 @@
 use crate::config::Config;
 use crate::config::{EnvVar, Opts, get_or_create_config};
-use crate::fs::init_fs;
-use crate::global_var::{ENV_VAR, GlobalVar, LOGGER, GLOBAL_VAR, LOGGER_CELL};
 use crate::err::Result;
+use crate::fs::init_fs;
+use crate::global_var::{ENV_VAR, GLOBAL_VAR, GlobalVar, LOGGER, LOGGER_CELL};
 
 mod config;
 mod err;
@@ -50,15 +50,20 @@ async fn init(config: &Config) -> Result<()> {
         .expect("Environment variable already set");
     LOGGER_CELL.set(logger).expect("Logger already set");
 
-    let global_var = GlobalVar { logger_handle: tokio::sync::Mutex::new(Some(logger_handle)) };
+    // LOGGER enabled starting from this point
 
-    GLOBAL_VAR.set(global_var).expect("Global variable already set");
+    let global_var = GlobalVar {
+        logger_handle: tokio::sync::Mutex::new(Some(logger_handle)),
+    };
+
+    GLOBAL_VAR
+        .set(global_var)
+        .expect("Global variable already set");
 
     Ok(())
 }
 
 async fn system_shutdown() {
-
     LOGGER.info("System shutting down...");
 
     // shutdown logger
@@ -68,7 +73,6 @@ async fn system_shutdown() {
             let _ = handle.await;
         }
     }
-
 }
 
 #[tokio::main]

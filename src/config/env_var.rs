@@ -1,8 +1,8 @@
 use crate::config::config::Config;
 use crate::err::Result;
+use crate::fs::util::expand_tilde;
 use crate::network::get_private_ipv4_with_mac;
 use std::net::{IpAddr, Ipv4Addr};
-use crate::fs::util::expand_tilde;
 
 #[derive(Debug)]
 struct KeySpec {
@@ -70,8 +70,10 @@ impl EnvVar {
     pub fn get_port(&self) -> u16 {
         self.connection.port
     }
+    pub fn get_ip_addr(&self) -> IpAddr {
+        self.connection.ip_addr
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -107,8 +109,17 @@ mod tests {
         );
 
         // Assert: internal fields are expanded as well (same module, so we can access privates)
-        assert!(ev.identity.key_spec.private_key_location.starts_with(&expected_home));
-        assert!(ev.identity.key_spec.public_key_location.starts_with(&expected_home));
-
+        assert!(
+            ev.identity
+                .key_spec
+                .private_key_location
+                .starts_with(&expected_home)
+        );
+        assert!(
+            ev.identity
+                .key_spec
+                .public_key_location
+                .starts_with(&expected_home)
+        );
     }
 }

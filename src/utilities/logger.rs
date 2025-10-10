@@ -31,6 +31,7 @@
 //! ```
 
 use crate::err::Result;
+use crate::global_var::LOGGER_CELL;
 use std::fmt;
 use std::ops::Deref;
 use std::path::Path;
@@ -38,7 +39,6 @@ use tokio::fs::OpenOptions;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use crate::global_var::LOGGER_CELL;
 
 /// Log level for messages.
 #[derive(Clone, Copy, Debug)]
@@ -116,12 +116,20 @@ enum LogRecord {
 impl LogRecord {
     fn new(level: LogLevel, msg: String) -> Self {
         let ts_millis = chrono_like::now_millis();
-        Self::Message { level, msg, ts_millis }
+        Self::Message {
+            level,
+            msg,
+            ts_millis,
+        }
     }
 
     fn format_line(&self) -> Option<String> {
         match self {
-            LogRecord::Message { level, msg, ts_millis } => {
+            LogRecord::Message {
+                level,
+                msg,
+                ts_millis,
+            } => {
                 // Format: 2025-10-08T21:22:33.123Z [LEVEL] message\n
                 let (date, time_millis) = chrono_like::split_iso8601(*ts_millis);
                 Some(format!(
@@ -189,7 +197,6 @@ pub async fn init_file_logger<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, J
 
     Ok((AsyncLogger { tx }, task))
 }
-
 
 pub(crate) struct Logger;
 
@@ -369,7 +376,11 @@ mod tests {
     #[test]
     fn test_format_line_with_fixed_timestamp() {
         // Fixed at Unix epoch to make the output deterministic
-        let rec = LogRecord::Message { level: LogLevel::Debug, msg: "xyz".into(), ts_millis: 0 };
+        let rec = LogRecord::Message {
+            level: LogLevel::Debug,
+            msg: "xyz".into(),
+            ts_millis: 0,
+        };
         let line = rec.format_line().expect("line should exist for Message");
         assert!(line.contains("[DEBUG]"));
         assert!(line.contains("xyz"));

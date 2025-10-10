@@ -229,10 +229,8 @@ pub fn interactive_config_setup(default_config_path: &str) -> Result<Config> {
     input_map.insert(name, input);
 
     config.identity.machine_name = input_map.remove("machine_name").unwrap();
-    config.identity.private_key_loc =
-        input_map.remove("private_key_location").unwrap();
-    config.identity.public_key_loc =
-        input_map.remove("public_key_location").unwrap();
+    config.identity.private_key_loc = input_map.remove("private_key_location").unwrap();
+    config.identity.public_key_loc = input_map.remove("public_key_location").unwrap();
     config.app_config.working_dir = input_map.remove("working_dir").unwrap();
     config.connection.conn_token = input_map.remove("conn_token").unwrap();
     config.connection.port = input_map

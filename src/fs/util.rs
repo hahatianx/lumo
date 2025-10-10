@@ -171,9 +171,17 @@ mod tests {
     #[test]
     fn check_permissions_nonexistent_dir_all_false() {
         let mut p = std::env::temp_dir();
-        p.push(format!("no_such_dir_{}_{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()));
-        if p.exists() { let _ = std::fs::remove_dir_all(&p); }
+        p.push(format!(
+            "no_such_dir_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
+        if p.exists() {
+            let _ = std::fs::remove_dir_all(&p);
+        }
         let perms = check_dir_permissions(&p);
         assert!(!perms.read && !perms.write && !perms.execute);
     }
@@ -181,11 +189,21 @@ mod tests {
     #[test]
     fn check_permissions_writable_temp_dir_has_write() {
         let mut p = std::env::temp_dir();
-        p.push(format!("perms_ok_{}_{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()));
+        p.push(format!(
+            "perms_ok_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
         std::fs::create_dir_all(&p).unwrap();
         let perms = check_dir_permissions(&p);
-        assert!(perms.write, "Expected write permission in temp dir: {:?}", perms);
+        assert!(
+            perms.write,
+            "Expected write permission in temp dir: {:?}",
+            perms
+        );
         let _ = std::fs::remove_dir_all(&p);
     }
 

@@ -36,15 +36,19 @@ pub async fn init_fs<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, JoinHandle
         .into());
     }
 
-    // 2. Get or create .disc directory.
+    // 2. Get or create a.disc directory.
     let disc_dir: PathBuf = base.join(".disc");
     fs::create_dir_all(&disc_dir)?;
 
-    // 3. Get or create logs directory under .disc.
+    // 3. Get or create a logs directory under .disc.
     let logs_dir: PathBuf = disc_dir.join("logs");
     fs::create_dir_all(&logs_dir)?;
 
-    // 4. Initialize async file logger directing output to logs directory.
+    // 4. Get or create a tmp directory under .disc., this folder will hold temporary downloads
+    let tmp_download_dir: PathBuf = disc_dir.join("tmp_downloads");
+    fs::create_dir_all(&tmp_download_dir)?;
+
+    // 5. Initialize the async file logger directing output to the logs' directory.
     let log_file: PathBuf = logs_dir.join("server.log");
     let (logger, task) = init_file_logger(&log_file).await?;
 
