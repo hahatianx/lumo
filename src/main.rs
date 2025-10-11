@@ -149,7 +149,9 @@ async fn main() {
         );
 
         let bytes = Bytes::from(hello_message.serialize());
-        let sender = &GLOBAL_VAR.get().unwrap().network_setup.lock().await.as_ref().unwrap().sender;
+        let sender = &GLOBAL_VAR.get().unwrap().network_setup.lock().await.as_ref().unwrap().sender.sender();
+
+        let _ = sender.broadcast(bytes).await;
 
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
