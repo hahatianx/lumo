@@ -1,5 +1,5 @@
 use crate::err::Result;
-use crate::global_var::ENV_VAR;
+use crate::global_var::{ENV_VAR, LOGGER};
 use bytes::Bytes;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::net::UdpSocket;
@@ -30,20 +30,13 @@ impl ListenerHandle {
 }
 
 impl UdpListener {
-    /// Bind to the IP and port configured in ENV_VAR.
-    /// If ENV_VAR is not initialized (e.g., in unit tests), this falls back to 0.0.0.0:14514.
-    pub async fn bind_from_env() -> Result<Self> {
-        let (ip, port) = if let Some(ev) = ENV_VAR.get() {
-            (ev.get_ip_addr(), ev.get_port())
-        } else {
-            (IpAddr::V4(Ipv4Addr::UNSPECIFIED), 14514)
-        };
-        Self::bind(SocketAddr::new(ip, port)).await
-    }
-
-    /// Bind to a specific SocketAddr. Prefer using bind_from_env in application code.
-    pub async fn bind(addr: SocketAddr) -> Result<Self> {
+    /// bind to any
+    pub async fn bind() -> Result<Self> {
+        let (ip, port) = (IpAddr::V4(Ipv4Addr::UNSPECIFIED), 14514);
+        let addr = SocketAddr::new(ip, port);
+        LOGGER.info(format!("Binding UDP listener to {}", addr));
         let socket = UdpSocket::bind(addr).await?;
+        socket.set_broadcast(true)?;
         Ok(Self { socket })
     }
 
@@ -67,17 +60,20 @@ impl UdpListener {
                     biased;
                     _ = &mut shutdown_rx => {
                         // graceful break
+                        LOGGER.info("Upd listener received shutdown signal, exiting...");
                         break;
                     }
                     res = self.socket.recv_from(&mut buf) => {
                         match res {
                             Ok((n, peer)) => {
                                 let data = Bytes::copy_from_slice(&buf[..n]);
+                                LOGGER.debug(format!("Received UDP packet from {:?} with length {}", peer, n));
                                 on_packet(data, peer);
                             }
                             Err(_e) => {
                                 // If receiving fails, continue the loop. In real app, consider logging and backoff.
                                 // For minimal implementation, just continue to keep listening.
+                                LOGGER.debug(format!("Failed to receive UDP packet {:?}", _e));
                                 continue;
                             }
                         }
@@ -104,8 +100,7 @@ mod tests {
     #[tokio::test]
     async fn udp_listener_receives_one_datagram() -> Result<()> {
         // Bind listener on a local ephemeral port
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let listener = UdpListener::bind(addr).await?;
+        let listener = UdpListener::bind().await?;
         let dest = listener.local_addr().unwrap();
 
         // Channel to capture received payload
@@ -123,7 +118,8 @@ mod tests {
             connect_timeout: Duration::from_secs(2),
             write_timeout: Duration::from_secs(2),
         });
-        sender_server.sender()
+        sender_server
+            .sender()
             .send(dest, Bytes::from_static(b"hello-listener"))
             .await?;
 

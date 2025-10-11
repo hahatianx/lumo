@@ -53,7 +53,7 @@ impl EnvVar {
             },
             connection: ConnectionConfig {
                 conn_token: config.connection.conn_token.clone(),
-                port: 14514,           // reserved port for server to listen on protocol messages
+                port: 14514, // reserved port for server to listen on protocol messages
                 file_sync_port: 11451, // reserved port for file sync
                 ip_addr: IpAddr::V4(ipv4),
             },

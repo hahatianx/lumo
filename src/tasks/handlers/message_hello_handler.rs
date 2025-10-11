@@ -1,10 +1,11 @@
-use crate::tasks::Handleable;
 use crate::err::Result;
+use crate::global_var::LOGGER;
 use crate::network::protocol::messages::HelloMessage;
+use crate::tasks::Handleable;
 
 impl Handleable for HelloMessage {
     fn handle(&mut self) -> Result<()> {
-        println!("HelloMessage: {:?}", self);
+        LOGGER.info(format!("HelloMessage: {:?}", self));
         Ok(())
     }
 }

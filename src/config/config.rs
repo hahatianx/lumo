@@ -148,13 +148,17 @@ lazy_static! {
         },
         ConfigInput {
             name: String::from("private_key_location"),
-            pattern: String::from(r#"^(?=.{1,260}$)(?:[A-Za-z]:)?(?:[\\/]{1,2})?(?:[^\x00<>:"/\\|?*\r\n]+(?:[\\/][^\x00<>:"/\\|?*\r\n]+)*)?$"#),
+            pattern: String::from(
+                r#"^(?=.{1,260}$)(?:[A-Za-z]:)?(?:[\\/]{1,2})?(?:[^\x00<>:"/\\|?*\r\n]+(?:[\\/][^\x00<>:"/\\|?*\r\n]+)*)?$"#
+            ),
             description: String::from("Please input your private key location"),
             default: None,
         },
         ConfigInput {
             name: String::from("public_key_location"),
-            pattern: String::from(r#"^(?=.{1,260}$)(?:[A-Za-z]:)?(?:[\\/]{1,2})?(?:[^\x00<>:"/\\|?*\r\n]+(?:[\\/][^\x00<>:"/\\|?*\r\n]+)*)?$"#),
+            pattern: String::from(
+                r#"^(?=.{1,260}$)(?:[A-Za-z]:)?(?:[\\/]{1,2})?(?:[^\x00<>:"/\\|?*\r\n]+(?:[\\/][^\x00<>:"/\\|?*\r\n]+)*)?$"#
+            ),
             description: String::from("Please input your public key location"),
             default: None,
         },
@@ -168,7 +172,9 @@ lazy_static! {
         },
         ConfigInput {
             name: String::from("working_dir"),
-            pattern: String::from(r#"^(?=.{1,260}$)(?:[A-Za-z]:)?(?:[\\/]{1,2})?(?:[^\x00<>:"/\\|?*\r\n]+(?:[\\/][^\x00<>:"/\\|?*\r\n]+)*)?$"#),
+            pattern: String::from(
+                r#"^(?=.{1,260}$)(?:[A-Za-z]:)?(?:[\\/]{1,2})?(?:[^\x00<>:"/\\|?*\r\n]+(?:[\\/][^\x00<>:"/\\|?*\r\n]+)*)?$"#
+            ),
             description: String::from("Set a working directory of the shared disc"),
             default: None,
         },
@@ -213,7 +219,9 @@ pub fn interactive_config_setup(default_config_path: &str) -> Result<Config> {
     // last question: where do you want to store this config?
     let config_file_input = ConfigInput {
         name: String::from("config_path"),
-        pattern: String::from(r#"^(?=.{1,260}$)(?:[A-Za-z]:)?(?:[\\/]{1,2})?(?:[^\x00<>:"/\\|?*\r\n]+(?:[\\/][^\x00<>:"/\\|?*\r\n]+)*)?$"#),
+        pattern: String::from(
+            r#"^(?=.{1,260}$)(?:[A-Za-z]:)?(?:[\\/]{1,2})?(?:[^\x00<>:"/\\|?*\r\n]+(?:[\\/][^\x00<>:"/\\|?*\r\n]+)*)?$"#,
+        ),
         description: String::from("Where do you want to store this config"),
         default: Some(ConfigInputValue::String(String::from(default_config_path))),
     };

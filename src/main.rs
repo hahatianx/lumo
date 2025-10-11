@@ -1,13 +1,13 @@
-use bytes::Bytes;
 use crate::config::Config;
 use crate::config::{EnvVar, Opts, get_or_create_config};
 use crate::err::Result;
 use crate::fs::init_fs;
-use crate::global_var::{ENV_VAR, GLOBAL_VAR, GlobalVar, LOGGER, LOGGER_CELL};
-use crate::network::{init_network, terminate_network};
+use crate::global_var::{DEBUG_MODE, ENV_VAR, GLOBAL_VAR, GlobalVar, LOGGER, LOGGER_CELL};
 use crate::network::protocol::messages::HelloMessage;
 use crate::network::protocol::protocol::Protocol;
+use crate::network::{init_network, terminate_network};
 use crate::tasks::{init_core, shutdown_core};
+use bytes::Bytes;
 
 mod config;
 mod err;
@@ -59,9 +59,7 @@ async fn init(config: &Config) -> Result<()> {
     // LOGGER enabled starting from this point
 
     let task_queue = match init_core().await {
-        Ok(task_queue) => {
-            task_queue
-        },
+        Ok(task_queue) => task_queue,
         Err(e) => {
             LOGGER.error(format!("Failed to initialize task queue: {}", e));
             panic!("Failed to initialize task queue");
@@ -69,9 +67,7 @@ async fn init(config: &Config) -> Result<()> {
     };
 
     let network_setup = match init_network(&task_queue).await {
-        Ok(network_setup) => {
-            network_setup
-        },
+        Ok(network_setup) => network_setup,
         Err(e) => {
             LOGGER.error(format!("Failed to initialize network: {}", e));
             panic!("Failed to initialize network");
@@ -94,11 +90,9 @@ async fn init(config: &Config) -> Result<()> {
 async fn system_shutdown() {
     LOGGER.info("System shutting down...");
     if let Some(gv) = GLOBAL_VAR.get() {
-
         if let Some(ns) = gv.network_setup.lock().await.take() {
             let _ = terminate_network(ns).await;
         }
-
 
         if let Some(tq) = gv.task_queue.lock().await.take() {
             let _ = shutdown_core(tq).await;
@@ -120,6 +114,13 @@ async fn main() {
         print_version_and_exit();
     }
 
+    if opts.debug {
+        println!("Debug mode enabled");
+        unsafe {
+            std::env::set_var("DEBUG_MODE", "1");
+        }
+    }
+
     // Always provide Some("") as a fallback default path for interactive setup
     let cfg_path_opt: Option<&str> = opts
         .config
@@ -139,18 +140,27 @@ async fn main() {
     }
 
     loop {
-
         let hello_message = HelloMessage::new(
             "127.0.0.1".to_string(),
             8080,
-            String::from("Alice"),
+            String::from("Mac"),
             String::from(ENV_VAR.get().unwrap().get_conn_token()),
             0,
         );
 
         let bytes = Bytes::from(hello_message.serialize());
-        let sender = &GLOBAL_VAR.get().unwrap().network_setup.lock().await.as_ref().unwrap().sender.sender();
+        let sender = &GLOBAL_VAR
+            .get()
+            .unwrap()
+            .network_setup
+            .lock()
+            .await
+            .as_ref()
+            .unwrap()
+            .sender
+            .sender();
 
+        println!("Sending message: {:?}", hello_message);
         let _ = sender.broadcast(bytes).await;
 
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;

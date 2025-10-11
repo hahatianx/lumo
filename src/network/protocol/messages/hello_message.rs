@@ -16,7 +16,13 @@ pub struct HelloMessage {
 }
 
 impl HelloMessage {
-    pub fn new(from_ip: String, from_port: u16, from_name: String, mac_addr: String, mode: u8) -> Self {
+    pub fn new(
+        from_ip: String,
+        from_port: u16,
+        from_name: String,
+        mac_addr: String,
+        mode: u8,
+    ) -> Self {
         Self {
             from_ip,
             from_port,

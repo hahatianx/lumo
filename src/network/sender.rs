@@ -86,7 +86,6 @@ impl NetworkSenderCore {
 }
 
 impl NetworkSender {
-
     /// Enqueue a send operation and await its result.
     pub async fn send(&self, addr: SocketAddr, bytes: Bytes) -> Result<()> {
         let req = SendReq::Data { addr, bytes };
@@ -96,7 +95,7 @@ impl NetworkSender {
                 std::io::ErrorKind::Other,
                 "NetworkSender worker task is not running",
             )
-                .into());
+            .into());
         }
         Ok(())
     }
@@ -123,7 +122,6 @@ impl NetworkSender {
     ) -> JoinHandle<Result<()>> {
         tokio::spawn(async move { send_once(addr, bytes, connect_timeout, write_timeout).await })
     }
-
 }
 
 async fn bind_and_connect(addr: SocketAddr) -> std::io::Result<UdpSocket> {

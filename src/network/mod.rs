@@ -22,7 +22,7 @@ pub struct NetworkSetup {
 /// Setup UdpListener
 pub async fn init_network(task_queue: &TaskQueue) -> Result<NetworkSetup> {
     let udp_sender = sender::NetworkSenderCore::new_queue_worker(sender::SenderConfig::default());
-    let udp_listener = listener::UdpListener::bind_from_env().await?;
+    let udp_listener = listener::UdpListener::bind().await?;
 
     let task_queue_sender = task_queue.sender();
     let udp_join_handle = udp_listener.into_task(move |bytes, peer| match parse_message(&bytes) {

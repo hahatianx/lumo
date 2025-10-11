@@ -31,7 +31,7 @@
 //! ```
 
 use crate::err::Result;
-use crate::global_var::LOGGER_CELL;
+use crate::global_var::{DEBUG_MODE, LOGGER_CELL};
 use std::fmt;
 use std::ops::Deref;
 use std::path::Path;
@@ -72,7 +72,11 @@ pub struct AsyncLogger {
 impl AsyncLogger {
     /// Log a message at a specific level.
     fn log<S: Into<String>>(&self, level: LogLevel, msg: S) {
-        match self.tx.try_send(LogRecord::new(level, msg.into())) {
+        let str_msg = msg.into();
+        if *DEBUG_MODE {
+            println!("{}: {}", level, &str_msg);
+        }
+        match self.tx.try_send(LogRecord::new(level, str_msg)) {
             Ok(_) => {}
             Err(err) => {
                 eprintln!("Failed to send log message: {}", err);
@@ -90,7 +94,9 @@ impl AsyncLogger {
         self.log(LogLevel::Trace, msg);
     }
     pub fn debug<S: Into<String>>(&self, msg: S) {
-        self.log(LogLevel::Debug, msg);
+        if *DEBUG_MODE {
+            self.log(LogLevel::Debug, msg);
+        }
     }
     pub fn info<S: Into<String>>(&self, msg: S) {
         self.log(LogLevel::Info, msg);
@@ -203,11 +209,33 @@ pub(crate) struct Logger;
 impl Deref for Logger {
     type Target = AsyncLogger;
     fn deref(&self) -> &Self::Target {
-        LOGGER_CELL.get().unwrap()
+        if let Some(l) = LOGGER_CELL.get() {
+            return l;
+        }
+        #[cfg(test)]
+        {
+            // In test builds, lazily install a fallback no-op logger so unit tests
+            // can call LOGGER.*() without panicking even if the logger was not
+            // explicitly initialized. The fallback keeps a channel alive but does
+            // not spawn any async task or write to disk.
+            let _ = LOGGER_CELL.set(test_fallback_logger());
+            return LOGGER_CELL
+                .get()
+                .expect("LOGGER_CELL should be set by test fallback");
+        }
+        LOGGER_CELL.get().expect("LOGGER_CELL should be set")
     }
 }
 
 // A tiny, self-contained helper to avoid pulling chrono; build time is a best-effort.
+#[cfg(test)]
+fn test_fallback_logger() -> AsyncLogger {
+    // Create a channel and leak the receiver to keep it alive without a runtime.
+    let (tx, rx) = mpsc::channel::<LogRecord>(1024);
+    let _ = Box::leak(Box::new(rx));
+    AsyncLogger { tx }
+}
+
 mod chrono_like {
     // We avoid bringing chrono as a runtime dependency by using std::time.
     // This provides millisecond precision and a minimal ISO8601 formatter.
@@ -401,7 +429,6 @@ mod tests {
         let (logger, task) = init_file_logger(&path).await.expect("init logger");
 
         logger.trace("trace msg");
-        logger.debug("debug msg");
         logger.info("info msg");
         logger.warn("warn msg");
         logger.error("error msg");
@@ -414,7 +441,6 @@ mod tests {
         // Each level marker should appear at least once
         for (marker, msg) in [
             ("[TRACE]", "trace msg"),
-            ("[DEBUG]", "debug msg"),
             ("[INFO]", "info msg"),
             ("[WARN]", "warn msg"),
             ("[ERROR]", "error msg"),
