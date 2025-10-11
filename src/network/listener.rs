@@ -13,6 +13,7 @@ pub struct UdpListener {
 }
 
 /// Handle to a running UDP listener task, allowing graceful shutdown.
+#[derive(Debug)]
 pub struct ListenerHandle {
     handle: JoinHandle<()>,
     shutdown_tx: oneshot::Sender<()>,

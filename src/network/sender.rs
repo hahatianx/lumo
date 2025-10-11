@@ -15,6 +15,7 @@ use tokio::time::timeout;
 ///
 /// By default, construct with `NetworkSender::new_queue_worker` and call `send` to enqueue a request
 /// and await completion. You can also use `NetworkSender::spawn_per_request` for ad-hoc sends.
+#[derive(Debug)]
 pub struct NetworkSender {
     tx: mpsc::Sender<SendReq>,
     worker: JoinHandle<()>,

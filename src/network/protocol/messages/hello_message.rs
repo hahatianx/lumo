@@ -1,10 +1,10 @@
 use crate::err::Result;
-
+use crate::network::protocol::HandleableProtocol;
 use crate::network::protocol::protocol::Protocol;
 use crate::network::protocol::token::Token;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct HelloMessage {
+pub struct HelloMessage {
     from_ip: String,
     from_port: u16,
     from_name: String,
@@ -27,6 +27,7 @@ impl HelloMessage {
     }
 }
 
+impl HandleableProtocol for HelloMessage {}
 impl Protocol for HelloMessage {
     fn serialize(&self) -> Vec<u8> {
         let tokens = vec![

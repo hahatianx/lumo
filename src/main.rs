@@ -3,12 +3,15 @@ use crate::config::{EnvVar, Opts, get_or_create_config};
 use crate::err::Result;
 use crate::fs::init_fs;
 use crate::global_var::{ENV_VAR, GLOBAL_VAR, GlobalVar, LOGGER, LOGGER_CELL};
+use crate::network::{init_network, terminate_network};
+use crate::tasks::{init_core, shutdown_core};
 
 mod config;
 mod err;
 mod fs;
 mod global_var;
 mod network;
+mod tasks;
 mod utilities;
 
 fn print_version_and_exit() -> ! {
@@ -52,8 +55,30 @@ async fn init(config: &Config) -> Result<()> {
 
     // LOGGER enabled starting from this point
 
+    let task_queue = match init_core().await {
+        Ok(task_queue) => {
+            task_queue
+        },
+        Err(e) => {
+            LOGGER.error(format!("Failed to initialize task queue: {}", e));
+            panic!("Failed to initialize task queue");
+        }
+    };
+
+    let network_setup = match init_network(&task_queue).await {
+        Ok(network_setup) => {
+            network_setup
+        },
+        Err(e) => {
+            LOGGER.error(format!("Failed to initialize network: {}", e));
+            panic!("Failed to initialize network");
+        }
+    };
+
     let global_var = GlobalVar {
         logger_handle: tokio::sync::Mutex::new(Some(logger_handle)),
+        task_queue: tokio::sync::Mutex::new(Some(task_queue)),
+        network_setup: tokio::sync::Mutex::new(Some(network_setup)),
     };
 
     GLOBAL_VAR
@@ -65,10 +90,19 @@ async fn init(config: &Config) -> Result<()> {
 
 async fn system_shutdown() {
     LOGGER.info("System shutting down...");
-
-    // shutdown logger
-    LOGGER.shutdown().await;
     if let Some(gv) = GLOBAL_VAR.get() {
+
+        if let Some(ns) = gv.network_setup.lock().await.take() {
+            let _ = terminate_network(ns).await;
+        }
+
+
+        if let Some(tq) = gv.task_queue.lock().await.take() {
+            let _ = shutdown_core(tq).await;
+        }
+
+        // shutdown logger
+        LOGGER.shutdown().await;
         if let Some(handle) = gv.logger_handle.lock().await.take() {
             let _ = handle.await;
         }

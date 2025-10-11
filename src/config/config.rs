@@ -19,7 +19,6 @@ pub struct Identity {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Connection {
     pub conn_token: String,
-    pub port: u16,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -44,7 +43,6 @@ impl Config {
             },
             connection: Connection {
                 conn_token: String::from(""),
-                port: 0,
             },
             app_config: AppConfig {
                 working_dir: String::from(""),
@@ -169,17 +167,11 @@ lazy_static! {
             default: None,
         },
         ConfigInput {
-            name: String::from("port_number"),
-            pattern: String::from(r"^[0-9]{1,5}$"),
-            description: String::from("Set a port number for the server to listen on"),
-            default: Some(ConfigInputValue::Uint(14514)),
-        },
-        ConfigInput {
             name: String::from("working_dir"),
             pattern: String::from(r"^[-0-9a-zA-Z_/.~\\]+$"),
             description: String::from("Set a working directory of the shared disc"),
             default: None,
-        }
+        },
     );
 }
 
@@ -233,11 +225,6 @@ pub fn interactive_config_setup(default_config_path: &str) -> Result<Config> {
     config.identity.public_key_loc = input_map.remove("public_key_location").unwrap();
     config.app_config.working_dir = input_map.remove("working_dir").unwrap();
     config.connection.conn_token = input_map.remove("conn_token").unwrap();
-    config.connection.port = input_map
-        .remove("port_number")
-        .unwrap()
-        .parse::<u16>()
-        .unwrap();
 
     let save_path = expand_tilde(&input_map.remove("config_path").unwrap());
 
@@ -350,7 +337,6 @@ mod tests {
         cfg.identity.private_key_loc = "/tmp/priv".into();
         cfg.identity.public_key_loc = "/tmp/pub".into();
         cfg.connection.conn_token = "TOKEN".into();
-        cfg.connection.port = 1234;
 
         let path = unique_temp_path("nested/config.toml");
         let parent = path.parent().unwrap();
@@ -369,7 +355,6 @@ mod tests {
             .unwrap();
         let loaded: Config = toml::from_str(&s).unwrap();
         assert_eq!(loaded.identity.machine_name, "m1");
-        assert_eq!(loaded.connection.port, 1234);
     }
 
     #[test]
@@ -390,14 +375,12 @@ mod tests {
         cfg.identity.private_key_loc = "/k/priv".into();
         cfg.identity.public_key_loc = "/k/pub".into();
         cfg.connection.conn_token = "XYZ".into();
-        cfg.connection.port = 8081;
         cfg.dump(config_path.to_str().unwrap()).unwrap();
 
         // Load using a path that starts with ~/ ...
         let loaded =
             Config::from_config(Some("~/disc_config.toml")).expect("should load via ~ expansion");
         assert_eq!(loaded.identity.machine_name, "local");
-        assert_eq!(loaded.connection.port, 8081);
 
         // Restore HOME
         if let Some(prev) = prev_home {
@@ -409,16 +392,5 @@ mod tests {
                 env::remove_var("HOME");
             }
         }
-    }
-
-    #[test]
-    fn config_input_list_contains_expected_defaults() {
-        // Ensure the default port appears in the prompt text
-        let port_input = super::CONFIG_INPUT_LIST
-            .iter()
-            .find(|i| i.name == "port_number")
-            .expect("port_number input present");
-        let prompt = port_input.to_prompt();
-        assert!(prompt.contains("14514"));
     }
 }

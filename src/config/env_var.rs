@@ -22,6 +22,7 @@ struct Identity {
 struct ConnectionConfig {
     conn_token: String,
     port: u16,
+    file_sync_port: u16,
     ip_addr: IpAddr,
 }
 
@@ -52,7 +53,8 @@ impl EnvVar {
             },
             connection: ConnectionConfig {
                 conn_token: config.connection.conn_token.clone(),
-                port: config.connection.port,
+                port: 14514,           // reserved port for server to listen on protocol messages
+                file_sync_port: 11451, // reserved port for file sync
                 ip_addr: IpAddr::V4(ipv4),
             },
             app_config: AppConfig {
@@ -94,7 +96,6 @@ mod tests {
         cfg.identity.private_key_loc = "~/.keys/priv".into();
         cfg.identity.public_key_loc = "~/.keys/pub".into();
         cfg.connection.conn_token = "TOKEN123".into();
-        cfg.connection.port = 14514;
         cfg.app_config.working_dir = "~/workdir".into();
 
         // Act
