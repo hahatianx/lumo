@@ -16,7 +16,7 @@ pub struct HelloMessage {
 }
 
 impl HelloMessage {
-    fn new(from_ip: String, from_port: u16, from_name: String, mac_addr: String, mode: u8) -> Self {
+    pub fn new(from_ip: String, from_port: u16, from_name: String, mac_addr: String, mode: u8) -> Self {
         Self {
             from_ip,
             from_port,
@@ -31,7 +31,7 @@ impl HandleableProtocol for HelloMessage {}
 impl Protocol for HelloMessage {
     fn serialize(&self) -> Vec<u8> {
         let tokens = vec![
-            Token::Simple("HELLO".to_string()),
+            Token::Simple(String::from("HELLO")),
             Token::Simple(self.from_ip.clone()),
             Token::Integer(self.from_port as u64),
             Token::Simple(self.from_name.clone()),

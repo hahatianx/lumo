@@ -11,7 +11,7 @@ pub use util::get_private_ipv4_with_mac;
 
 #[derive(Debug)]
 pub struct NetworkSetup {
-    pub sender: sender::NetworkSender,
+    pub sender: sender::NetworkSenderCore,
 
     // pub listener: listener::UdpListener,
     pub listener_handle: listener::ListenerHandle,
@@ -21,7 +21,7 @@ pub struct NetworkSetup {
 /// Setup UdpSender
 /// Setup UdpListener
 pub async fn init_network(task_queue: &TaskQueue) -> Result<NetworkSetup> {
-    let udp_sender = sender::NetworkSender::new_queue_worker(sender::SenderConfig::default());
+    let udp_sender = sender::NetworkSenderCore::new_queue_worker(sender::SenderConfig::default());
     let udp_listener = listener::UdpListener::bind_from_env().await?;
 
     let task_queue_sender = task_queue.sender();

@@ -95,7 +95,7 @@ impl UdpListener {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::sender::{NetworkSender, SenderConfig};
+    use crate::network::sender::{NetworkSenderCore, SenderConfig};
     use bytes::Bytes;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::time::Duration;
@@ -118,12 +118,12 @@ mod tests {
         });
 
         // Send one datagram to the listener
-        let sender = NetworkSender::new_queue_worker(SenderConfig {
+        let sender_server = NetworkSenderCore::new_queue_worker(SenderConfig {
             queue_bound: 16,
             connect_timeout: Duration::from_secs(2),
             write_timeout: Duration::from_secs(2),
         });
-        sender
+        sender_server.sender()
             .send(dest, Bytes::from_static(b"hello-listener"))
             .await?;
 
@@ -132,7 +132,7 @@ mod tests {
         assert_eq!(&got[..], b"hello-listener");
 
         // Shutdown sender and the listener task gracefully
-        let _ = sender.shutdown().await;
+        let _ = sender_server.shutdown().await;
         let _ = handle.shutdown().await?;
 
         Ok(())

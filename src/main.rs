@@ -1,9 +1,12 @@
+use bytes::Bytes;
 use crate::config::Config;
 use crate::config::{EnvVar, Opts, get_or_create_config};
 use crate::err::Result;
 use crate::fs::init_fs;
 use crate::global_var::{ENV_VAR, GLOBAL_VAR, GlobalVar, LOGGER, LOGGER_CELL};
 use crate::network::{init_network, terminate_network};
+use crate::network::protocol::messages::HelloMessage;
+use crate::network::protocol::protocol::Protocol;
 use crate::tasks::{init_core, shutdown_core};
 
 mod config;
@@ -133,6 +136,22 @@ async fn main() {
         Err(e) => {
             panic!("Failed to load or create configuration: {}", e);
         }
+    }
+
+    loop {
+
+        let hello_message = HelloMessage::new(
+            "127.0.0.1".to_string(),
+            8080,
+            String::from("Alice"),
+            String::from(ENV_VAR.get().unwrap().get_conn_token()),
+            0,
+        );
+
+        let bytes = Bytes::from(hello_message.serialize());
+        let sender = &GLOBAL_VAR.get().unwrap().network_setup.lock().await.as_ref().unwrap().sender;
+
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
 
     system_shutdown().await;

@@ -16,9 +16,14 @@ use tokio::time::timeout;
 /// By default, construct with `NetworkSender::new_queue_worker` and call `send` to enqueue a request
 /// and await completion. You can also use `NetworkSender::spawn_per_request` for ad-hoc sends.
 #[derive(Debug)]
-pub struct NetworkSender {
+pub struct NetworkSenderCore {
     tx: mpsc::Sender<SendReq>,
     worker: JoinHandle<()>,
+}
+
+#[derive(Debug)]
+pub struct NetworkSender {
+    tx: mpsc::Sender<SendReq>,
 }
 
 #[derive(Clone, Debug)]
@@ -47,7 +52,7 @@ enum SendReq {
     Shutdown,
 }
 
-impl NetworkSender {
+impl NetworkSenderCore {
     /// Create a queued NetworkSender with a single consumer worker.
     /// This approach is generally preferable for:
     /// - Applying backpressure
@@ -64,6 +69,24 @@ impl NetworkSender {
         Self { tx, worker }
     }
 
+    pub fn sender(&self) -> NetworkSender {
+        NetworkSender {
+            tx: self.tx.clone(),
+        }
+    }
+
+    /// Gracefully shutdown the queue worker by sending a Shutdown request and awaiting the worker task.
+    pub async fn shutdown(self) -> Result<()> {
+        // Ignore errors if the channel is already closed.
+        let _ = self.tx.send(SendReq::Shutdown).await;
+        // Await the worker to finish cleanup.
+        let _ = self.worker.await;
+        Ok(())
+    }
+}
+
+impl NetworkSender {
+
     /// Enqueue a send operation and await its result.
     pub async fn send(&self, addr: SocketAddr, bytes: Bytes) -> Result<()> {
         let req = SendReq::Data { addr, bytes };
@@ -73,7 +96,7 @@ impl NetworkSender {
                 std::io::ErrorKind::Other,
                 "NetworkSender worker task is not running",
             )
-            .into());
+                .into());
         }
         Ok(())
     }
@@ -101,14 +124,6 @@ impl NetworkSender {
         tokio::spawn(async move { send_once(addr, bytes, connect_timeout, write_timeout).await })
     }
 
-    /// Gracefully shutdown the queue worker by sending a Shutdown request and awaiting the worker task.
-    pub async fn shutdown(self) -> Result<()> {
-        // Ignore errors if the channel is already closed.
-        let _ = self.tx.send(SendReq::Shutdown).await;
-        // Await the worker to finish cleanup.
-        let _ = self.worker.await;
-        Ok(())
-    }
 }
 
 async fn bind_and_connect(addr: SocketAddr) -> std::io::Result<UdpSocket> {
@@ -268,7 +283,7 @@ mod tests {
                 .map(|b| tx.send(Bytes::from(b)));
         });
 
-        let sender = NetworkSender::new_queue_worker(SenderConfig::default());
+        let sender = NetworkSenderCore::new_queue_worker(SenderConfig::default()).sender();
         sender.send(addr, Bytes::from_static(b"hello")).await?;
         let got = rx.await.unwrap();
         assert_eq!(&got[..], b"hello");
@@ -314,7 +329,7 @@ mod tests {
         drop(s1);
         drop(s2);
 
-        let sender = NetworkSender::new_queue_worker(SenderConfig::default());
+        let sender = NetworkSenderCore::new_queue_worker(SenderConfig::default()).sender();
         let payload = Bytes::from_static(b"bcast");
         // This should send to 255.255.255.255 without error.
         sender.broadcast(payload.clone()).await?;
