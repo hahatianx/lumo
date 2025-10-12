@@ -13,6 +13,7 @@ regex = "1"
 pnet_datalink = "0.34"
 bytes = "1.10.1"
 lexical-core = "0.8"
+chrono = "0.4"
 
 [build-dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

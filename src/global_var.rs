@@ -1,6 +1,6 @@
 use crate::config::EnvVar;
+use crate::core::tasks::task_queue::TaskQueue;
 use crate::network::NetworkSetup;
-use crate::tasks::task_queue::TaskQueue;
 use crate::utilities::AsyncLogger;
 use std::sync::{LazyLock, OnceLock};
 use tokio::sync::Mutex;

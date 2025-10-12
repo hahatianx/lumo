@@ -1,8 +1,8 @@
+use crate::core::tasks::Handleable;
 use crate::err::Result;
 use crate::network::protocol::messages::hello_message::HelloMessage;
 use crate::network::protocol::protocol::Protocol;
 use crate::network::protocol::token::Token;
-use crate::tasks::Handleable;
 use bytes::Bytes;
 
 pub mod messages;

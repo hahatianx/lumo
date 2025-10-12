@@ -2,19 +2,21 @@ use crate::config::Config;
 use crate::config::{EnvVar, Opts, get_or_create_config};
 use crate::err::Result;
 use crate::fs::init_fs;
-use crate::global_var::{DEBUG_MODE, ENV_VAR, GLOBAL_VAR, GlobalVar, LOGGER, LOGGER_CELL};
+use crate::global_var::{ENV_VAR, GLOBAL_VAR, GlobalVar, LOGGER, LOGGER_CELL};
 use crate::network::protocol::messages::HelloMessage;
 use crate::network::protocol::protocol::Protocol;
 use crate::network::{init_network, terminate_network};
-use crate::tasks::{init_core, shutdown_core};
 use bytes::Bytes;
+use tokio::{select, signal};
+use core::tasks::{init_task_queue, shutdown_core};
+use tokio::sync::Mutex;
 
 mod config;
+mod core;
 mod err;
 mod fs;
 mod global_var;
 mod network;
-mod tasks;
 mod utilities;
 
 fn print_version_and_exit() -> ! {
@@ -47,7 +49,7 @@ async fn init(config: &Config) -> Result<()> {
 
     let env_var = EnvVar::from_config(config).expect("Failed to set environment variables");
 
-    let (logger, logger_handle) = init_fs(env_var.get_working_dir())
+    let (logger, logger_handle) = init_fs(env_var.get_working_dir().await)
         .await
         .expect("Failed to initialize logger");
 
@@ -58,7 +60,7 @@ async fn init(config: &Config) -> Result<()> {
 
     // LOGGER enabled starting from this point
 
-    let task_queue = match init_core().await {
+    let task_queue = match init_task_queue().await {
         Ok(task_queue) => task_queue,
         Err(e) => {
             LOGGER.error(format!("Failed to initialize task queue: {}", e));
@@ -75,9 +77,9 @@ async fn init(config: &Config) -> Result<()> {
     };
 
     let global_var = GlobalVar {
-        logger_handle: tokio::sync::Mutex::new(Some(logger_handle)),
-        task_queue: tokio::sync::Mutex::new(Some(task_queue)),
-        network_setup: tokio::sync::Mutex::new(Some(network_setup)),
+        logger_handle: Mutex::new(Some(logger_handle)),
+        task_queue: Mutex::new(Some(task_queue)),
+        network_setup: Mutex::new(Some(network_setup)),
     };
 
     GLOBAL_VAR
@@ -103,6 +105,35 @@ async fn system_shutdown() {
         if let Some(handle) = gv.logger_handle.lock().await.take() {
             let _ = handle.await;
         }
+    }
+}
+
+async fn run_server() {
+    loop {
+        let hello_message = HelloMessage::new(
+            "127.0.0.1".to_string(),
+            8080,
+            String::from("Mac"),
+            String::from(ENV_VAR.get().unwrap().get_conn_token()),
+            0,
+        );
+
+        let bytes = Bytes::from(hello_message.serialize());
+        let sender = &GLOBAL_VAR
+            .get()
+            .unwrap()
+            .network_setup
+            .lock()
+            .await
+            .as_ref()
+            .unwrap()
+            .sender
+            .sender();
+
+        println!("Sending message: {:?}", hello_message);
+        let _ = sender.broadcast(bytes).await;
+
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
 }
 
@@ -139,31 +170,13 @@ async fn main() {
         }
     }
 
-    loop {
-        let hello_message = HelloMessage::new(
-            "127.0.0.1".to_string(),
-            8080,
-            String::from("Mac"),
-            String::from(ENV_VAR.get().unwrap().get_conn_token()),
-            0,
-        );
-
-        let bytes = Bytes::from(hello_message.serialize());
-        let sender = &GLOBAL_VAR
-            .get()
-            .unwrap()
-            .network_setup
-            .lock()
-            .await
-            .as_ref()
-            .unwrap()
-            .sender
-            .sender();
-
-        println!("Sending message: {:?}", hello_message);
-        let _ = sender.broadcast(bytes).await;
-
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    select! {
+        _ = signal::ctrl_c() => {
+            LOGGER.info("Received Ctrl-C, shutting down...");
+        }
+        _ = run_server() => {
+            LOGGER.info("Server shutting down...");
+        }
     }
 
     system_shutdown().await;

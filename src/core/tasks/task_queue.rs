@@ -1,6 +1,6 @@
+use crate::core::tasks::handlers::AsyncHandleable;
 use crate::err::Result;
 use crate::global_var::LOGGER;
-use crate::tasks::handlers::AsyncHandleable;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -161,7 +161,7 @@ mod tests {
         }
     }
 
-    impl crate::tasks::handlers::Handleable for TestProto {
+    impl crate::core::tasks::handlers::Handleable for TestProto {
         fn handle(&mut self) -> Result<()> {
             Ok(())
         }

@@ -1,5 +1,5 @@
 use crate::err::Result;
-use crate::global_var::{ENV_VAR, LOGGER};
+use crate::global_var::LOGGER;
 use bytes::Bytes;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::net::UdpSocket;
@@ -93,7 +93,6 @@ mod tests {
     use super::*;
     use crate::network::sender::{NetworkSenderCore, SenderConfig};
     use bytes::Bytes;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::time::Duration;
     use tokio::sync::oneshot;
 
