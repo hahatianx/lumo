@@ -1,6 +1,7 @@
 mod handlers;
 pub use handlers::AsyncHandleable;
 mod helpers;
+mod jobs;
 pub mod task_queue;
 
 use crate::core::tasks::task_queue::TaskQueue;
