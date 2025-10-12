@@ -1,12 +1,13 @@
 mod listener;
 pub mod protocol;
 mod sender;
+pub use sender::NetworkSender;
 mod util;
 
+use crate::core::tasks::task_queue::TaskQueue;
 use crate::err::Result;
-use crate::global_var::LOGGER;
+use crate::global_var::{ENV_VAR, LOGGER};
 use crate::network::protocol::parse_message;
-use crate::tasks::task_queue::TaskQueue;
 pub use util::get_private_ipv4_with_mac;
 
 #[derive(Debug)]
@@ -25,17 +26,24 @@ pub async fn init_network(task_queue: &TaskQueue) -> Result<NetworkSetup> {
     let udp_listener = listener::UdpListener::bind().await?;
 
     let task_queue_sender = task_queue.sender();
-    let udp_join_handle = udp_listener.into_task(move |bytes, peer| match parse_message(&bytes) {
-        Ok(msg) => {
-            if let Err(e) = task_queue_sender.try_send(msg) {
-                LOGGER.error(format!("Unable to send message to task queue: {:?}", e));
-            }
+    let udp_join_handle = udp_listener.into_task(move |bytes, peer| {
+        if peer.ip() == ENV_VAR.get().unwrap().get_ip_addr() {
+            // Ignore packets from itself
+            LOGGER.debug(format!("Ignoring packet from self: {:?}", peer));
+            return;
         }
-        Err(e) => {
-            LOGGER.error(format!(
-                "Unable to translate bytes into messages bytes: {:?}, peer: {:?}, error: {:?}",
-                bytes, peer, e
-            ));
+        match parse_message(&bytes) {
+            Ok(msg) => {
+                if let Err(e) = task_queue_sender.try_send(msg) {
+                    LOGGER.error(format!("Unable to send message to task queue: {:?}", e));
+                }
+            }
+            Err(e) => {
+                LOGGER.error(format!(
+                    "Unable to translate bytes into messages bytes: {:?}, peer: {:?}, error: {:?}",
+                    bytes, peer, e
+                ));
+            }
         }
     });
 

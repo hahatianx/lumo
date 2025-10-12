@@ -1,6 +1,7 @@
 use crate::config::EnvVar;
-use crate::network::NetworkSetup;
-use crate::tasks::task_queue::TaskQueue;
+use crate::core::tasks::task_queue::TaskQueue;
+use crate::err::Result;
+use crate::network::{NetworkSender, NetworkSetup};
 use crate::utilities::AsyncLogger;
 use std::sync::{LazyLock, OnceLock};
 use tokio::sync::Mutex;
@@ -10,6 +11,7 @@ pub static LOGGER_CELL: OnceLock<AsyncLogger> = OnceLock::new();
 pub(crate) static LOGGER: crate::utilities::logger::Logger = crate::utilities::logger::Logger;
 pub static ENV_VAR: OnceLock<EnvVar> = OnceLock::new();
 pub static GLOBAL_VAR: OnceLock<GlobalVar> = OnceLock::new();
+
 pub static DEBUG_MODE: LazyLock<bool> = LazyLock::new(|| {
     let env_var = std::env::var("DEBUG_MODE").unwrap_or_default();
     let debug_mode = env_var == "1" || env_var == "true";
@@ -23,4 +25,18 @@ pub struct GlobalVar {
     pub task_queue: Mutex<Option<TaskQueue>>,
 
     pub network_setup: Mutex<Option<NetworkSetup>>,
+}
+
+pub async fn get_msg_sender() -> Result<NetworkSender> {
+    let sender = GLOBAL_VAR
+        .get()
+        .unwrap()
+        .network_setup
+        .lock()
+        .await
+        .as_ref()
+        .unwrap()
+        .sender
+        .sender();
+    Ok(sender)
 }

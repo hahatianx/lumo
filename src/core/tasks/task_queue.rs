@@ -1,6 +1,6 @@
+use crate::core::tasks::handlers::AsyncHandleable;
 use crate::err::Result;
 use crate::global_var::LOGGER;
-use crate::tasks::handlers::AsyncHandleable;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -24,7 +24,7 @@ impl TaskQueueSender {
     /// Note: We require 'static here because items are ultimately handled on a
     /// dedicated OS thread (see dispatch). The thread may outlive the caller's
     /// stack frame, so messages cannot hold non-'static borrows.
-    pub async fn send(&self, msg: Box<AsyncHandleable>) -> Result<()> {
+    pub async fn send(&self, msg: Box<dyn AsyncHandleable>) -> Result<()> {
         if let Err(_e) = self.tx.send(QueueMsg::Item(msg)).await {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -38,7 +38,7 @@ impl TaskQueueSender {
     /// Non-async, immediate send attempt that can be called from any thread/context.
     /// Returns an error if the channel is full or closed.
     /// Note: Same 'static rationale as send(): items cross a thread boundary.
-    pub fn try_send(&self, msg: Box<AsyncHandleable>) -> Result<()> {
+    pub fn try_send(&self, msg: Box<dyn AsyncHandleable>) -> Result<()> {
         match self.tx.try_send(QueueMsg::Item(msg)) {
             Ok(_) => Ok(()),
             Err(e) => {
@@ -71,7 +71,7 @@ impl Default for TaskQueueConfig {
 // moved into an OS thread via dispatch(). Using 'static here makes the API
 // intent explicit and prevents enqueuing messages that borrow short‑lived data.
 enum QueueMsg {
-    Item(Box<AsyncHandleable>),
+    Item(Box<dyn AsyncHandleable>),
     Shutdown,
 }
 
@@ -102,19 +102,11 @@ impl TaskQueue {
         Self { tx, worker }
     }
 
-    fn dispatch(mut msg: Box<AsyncHandleable>) {
-        // We hop from the Tokio task onto an OS thread here. std::thread::spawn
-        // requires the closure (and everything it moves) to be 'static because the
-        // spawned thread can outlive the caller's stack frame. By taking a Box<dyn
-        // Handleable + Send + 'static>, we guarantee the message carries no
-        // borrows.
-        let _ = std::thread::spawn(move || {
-            // Call the message handler in its own thread; log errors.
-            match msg.handle() {
-                Ok(()) => {}
-                Err(e) => {
-                    LOGGER.error(format!("An error occurred while handling message {:?}", e));
-                }
+    fn dispatch(mut msg: Box<dyn AsyncHandleable>) {
+        // Run the async handler on the Tokio runtime.
+        tokio::spawn(async move {
+            if let Err(e) = msg.handle().await {
+                LOGGER.error(format!("An error occurred while handling message: {:?}", e));
             }
         });
     }
@@ -138,6 +130,7 @@ impl TaskQueue {
 mod tests {
     use super::*;
     use crate::network::protocol::protocol::Protocol;
+    use async_trait::async_trait;
 
     // A simple test Protocol implementation for verifying the queue behavior.
     #[derive(Clone, Debug)]
@@ -161,8 +154,9 @@ mod tests {
         }
     }
 
-    impl crate::tasks::handlers::Handleable for TestProto {
-        fn handle(&mut self) -> Result<()> {
+    #[async_trait]
+    impl AsyncHandleable for TestProto {
+        async fn handle(&mut self) -> Result<()> {
             Ok(())
         }
     }

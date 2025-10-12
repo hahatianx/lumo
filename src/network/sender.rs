@@ -14,7 +14,7 @@ use tokio::time::timeout;
 /// - Per-request spawned task: fire-and-forget style; useful for very low latency fan-out with lower coordination.
 ///
 /// By default, construct with `NetworkSender::new_queue_worker` and call `send` to enqueue a request
-/// and await completion. You can also use `NetworkSender::spawn_per_request` for ad-hoc sends.
+/// and await completion. You can also use `NetworkSender::spawn_per_request` for adhoc sending.
 #[derive(Debug)]
 pub struct NetworkSenderCore {
     tx: mpsc::Sender<SendReq>,
@@ -30,7 +30,7 @@ pub struct NetworkSender {
 pub struct SenderConfig {
     /// Max queued requests before backpressure. If 0, an unbounded channel is used.
     pub queue_bound: usize,
-    /// Timeout for binding+connecting a UDP socket before a send.
+    /// Timeout for binding+connecting a UDP socket before a sending.
     /// Set to Duration::ZERO to disable the connect timeout for UDP.
     pub connect_timeout: Duration,
     /// Write timeout for sending bytes on a UDP socket.
@@ -100,14 +100,14 @@ impl NetworkSender {
         Ok(())
     }
 
-    /// Broadcast the same bytes to multiple addresses by enqueuing one send per address.
-    /// This awaits each enqueue to apply backpressure. Stops and returns error on first failure.
+    /// Broadcast the same bytes to multiple addresses by enqueuing one sending per address.
+    /// This awaits each enqueue to apply backpressure. Stops and returns an error on the first failure.
     pub async fn broadcast(&self, bytes: Bytes) -> Result<()> {
         // Send the payload to 255.255.255.255:<port>. If ENV_VAR is not initialized (e.g., in tests),
         // fall back to the conventional default port used by this project (14514).
         let port = ENV_VAR.get().map(|ev| ev.get_port()).unwrap_or(14514);
-        let bcast_ip = IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255));
-        let addr = SocketAddr::new(bcast_ip, port);
+        let broadcast_ip = IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255));
+        let addr = SocketAddr::new(broadcast_ip, port);
         self.send(addr, bytes.clone()).await?;
         Ok(())
     }
@@ -191,7 +191,7 @@ async fn run_worker(mut rx: mpsc::Receiver<SendReq>, cfg: SenderConfig) {
                         }
                     };
 
-                    // Try to send; on failure, create a fresh socket once and retry.
+                    // Try to send it; on failure, create a fresh socket once and retry.
                     match send_with_timeout(sock, &bytes, cfg.write_timeout).await {
                         Ok(s) => {
                             // put back for reuse
@@ -225,7 +225,7 @@ async fn run_worker(mut rx: mpsc::Receiver<SendReq>, cfg: SenderConfig) {
     // Clean up: let UdpSockets drop here.
 }
 
-async fn send_with_timeout(mut sock: UdpSocket, bytes: &Bytes, to: Duration) -> Result<UdpSocket> {
+async fn send_with_timeout(sock: UdpSocket, bytes: &Bytes, to: Duration) -> Result<UdpSocket> {
     timeout(to, async {
         let _ = sock.send(bytes).await?;
         Ok::<_, crate::err::Error>(())
@@ -319,11 +319,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcast_multiple_receivers() -> Result<()> {
-        // Prepare two dummy IPv4 SocketAddrs with different ports to exercise the API.
+        // Prepare two fake IPv4 SocketAddrs with different ports to exercise the API.
         let s1 = UdpSocket::bind("0.0.0.0:0").await.unwrap();
         let s2 = UdpSocket::bind("0.0.0.0:0").await.unwrap();
-        let a1 = s1.local_addr().unwrap();
-        let a2 = s2.local_addr().unwrap();
+        let _a1 = s1.local_addr().unwrap();
+        let _a2 = s2.local_addr().unwrap();
         drop(s1);
         drop(s2);
 

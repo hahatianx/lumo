@@ -1,15 +1,15 @@
+use crate::core::tasks::AsyncHandleable;
 use crate::err::Result;
 use crate::network::protocol::messages::hello_message::HelloMessage;
 use crate::network::protocol::protocol::Protocol;
 use crate::network::protocol::token::Token;
-use crate::tasks::Handleable;
 use bytes::Bytes;
 
 pub mod messages;
 pub mod protocol;
 pub mod token;
 
-pub trait HandleableProtocol: protocol::Protocol + Handleable + Send + 'static {}
+pub trait HandleableProtocol: protocol::Protocol + AsyncHandleable + Send + 'static {}
 
 pub fn parse_message(bytes: &Bytes) -> Result<Box<dyn HandleableProtocol>> {
     let tokens = Token::parse_all(bytes)?;

@@ -2,7 +2,9 @@ use crate::config::config::Config;
 use crate::err::Result;
 use crate::fs::util::expand_tilde;
 use crate::network::get_private_ipv4_with_mac;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Debug)]
 struct KeySpec {
@@ -27,15 +29,31 @@ struct ConnectionConfig {
 }
 
 #[derive(Debug)]
-struct AppConfig {
+pub struct AppConfig {
     working_dir: String,
+
+    peer_expires_after_in_sec: u64,
+}
+
+impl AppConfig {
+    pub fn get_peer_expires_after_in_sec(&self) -> u64 {
+        self.peer_expires_after_in_sec
+    }
+
+    pub fn update_peer_expires_after_in_sec(&mut self, new_value: u64) {
+        self.peer_expires_after_in_sec = new_value;
+    }
+
+    pub fn get_working_dir(&self) -> &str {
+        &self.working_dir
+    }
 }
 
 #[derive(Debug)]
 pub struct EnvVar {
     identity: Identity,
     connection: ConnectionConfig,
-    app_config: AppConfig,
+    pub(crate) app_config: Arc<RwLock<AppConfig>>,
 }
 
 impl EnvVar {
@@ -57,23 +75,43 @@ impl EnvVar {
                 file_sync_port: 11451, // reserved port for file sync
                 ip_addr: IpAddr::V4(ipv4),
             },
-            app_config: AppConfig {
+            app_config: Arc::new(RwLock::new(AppConfig {
                 working_dir: expand_tilde(&config.app_config.working_dir),
-            },
+                peer_expires_after_in_sec: 60, // hard code for now.  Change it later
+            })),
         })
     }
 
-    pub fn get_working_dir(&self) -> &str {
-        &self.app_config.working_dir
+    pub async fn get_working_dir(&self) -> String {
+        self.app_config.as_ref().read().await.working_dir.clone()
     }
+
     pub fn get_conn_token(&self) -> &str {
         &self.connection.conn_token
     }
+
     pub fn get_port(&self) -> u16 {
         self.connection.port
     }
+
     pub fn get_ip_addr(&self) -> IpAddr {
         self.connection.ip_addr
+    }
+
+    pub fn get_mac_addr(&self) -> String {
+        self.identity.mac_addr.clone()
+    }
+
+    pub fn get_machine_name(&self) -> String {
+        self.identity.machine_name.clone()
+    }
+
+    pub fn get_private_key_location(&self) -> String {
+        self.identity.key_spec.private_key_location.clone()
+    }
+
+    pub fn get_public_key_location(&self) -> String {
+        self.identity.key_spec.public_key_location.clone()
     }
 }
 
@@ -84,9 +122,9 @@ mod tests {
     use serial_test::serial;
     use std::env;
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn envvar_from_config_expands_tilde_and_preserves_fields() {
+    async fn envvar_from_config_expands_tilde_and_preserves_fields() {
         // Arrange: set HOME to a unique temporary directory
         let expected_home = env::var("HOME").unwrap();
 
@@ -105,7 +143,7 @@ mod tests {
         assert_eq!(ev.get_conn_token(), "TOKEN123");
         assert_eq!(ev.get_port(), 14514);
         assert_eq!(
-            ev.get_working_dir(),
+            ev.get_working_dir().await,
             format!("{}/{}", expected_home, "workdir")
         );
 

@@ -245,7 +245,7 @@ pub fn interactive_config_setup(default_config_path: &str) -> Result<Config> {
 pub fn get_or_create_config(config_path: Option<&str>) -> Result<Config> {
     match Config::from_config(config_path) {
         Ok(config) => Ok(config),
-        Err(e) => {
+        Err(_e) => {
             if !std::io::stdin().is_terminal() {
                 return Err("No configuration file found and stdin is not a TTY; run in a terminal to create a config or provide --config pointing to a valid file.".into());
             }

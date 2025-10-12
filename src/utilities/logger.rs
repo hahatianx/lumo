@@ -32,6 +32,7 @@
 
 use crate::err::Result;
 use crate::global_var::{DEBUG_MODE, LOGGER_CELL};
+use chrono::{DateTime, Utc};
 use std::fmt;
 use std::ops::Deref;
 use std::path::Path;
@@ -55,8 +56,8 @@ impl fmt::Display for LogLevel {
         let s = match self {
             LogLevel::Trace => "TRACE",
             LogLevel::Debug => "DEBUG",
-            LogLevel::Info => "INFO",
-            LogLevel::Warn => "WARN",
+            LogLevel::Info => "INFO ",
+            LogLevel::Warn => "WARN ",
             LogLevel::Error => "ERROR",
         };
         write!(f, "{}", s)
@@ -114,14 +115,14 @@ enum LogRecord {
     Message {
         level: LogLevel,
         msg: String,
-        ts_millis: i128,
+        ts_millis: i64,
     },
     Shutdown,
 }
 
 impl LogRecord {
     fn new(level: LogLevel, msg: String) -> Self {
-        let ts_millis = chrono_like::now_millis();
+        let ts_millis = Utc::now().timestamp_millis();
         Self::Message {
             level,
             msg,
@@ -137,13 +138,10 @@ impl LogRecord {
                 ts_millis,
             } => {
                 // Format: 2025-10-08T21:22:33.123Z [LEVEL] message\n
-                let (date, time_millis) = chrono_like::split_iso8601(*ts_millis);
-                Some(format!(
-                    "{}Z [{}] {}\n",
-                    format!("{}T{}", date, time_millis),
-                    level,
-                    msg
-                ))
+                let time_stamp = DateTime::from_timestamp_millis(*ts_millis)
+                    .unwrap()
+                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                Some(format!("{} [{}] {}\n", time_stamp, level, msg))
             }
             LogRecord::Shutdown => None,
         }
@@ -191,6 +189,7 @@ pub async fn init_file_logger<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, J
                             }
                         }
                     }
+                    let _ = writer.flush().await;
                 }
                 LogRecord::Shutdown => {
                     break;
@@ -236,109 +235,11 @@ fn test_fallback_logger() -> AsyncLogger {
     AsyncLogger { tx }
 }
 
-mod chrono_like {
-    // We avoid bringing chrono as a runtime dependency by using std::time.
-    // This provides millisecond precision and a minimal ISO8601 formatter.
-    pub fn now_millis() -> i128 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        now.as_millis() as i128
-    }
-
-    pub fn split_iso8601(ts_millis: i128) -> (String, String) {
-        // Convert millis to seconds and remainder
-        let secs = (ts_millis / 1000) as i64;
-        let millis = (ts_millis % 1000) as i64;
-
-        // Convert seconds to UTC date/time using chrono-like formatting via time crate logic.
-        // But since we cannot import additional crates here, we do a minimal RFC3339-ish string
-        // by using chrono math assumptions; this is approximate and sufficient for logging.
-        // We will format as YYYY-MM-DD and HH:MM:SS.mmm using UTC from std::time.
-        use std::time::{Duration, UNIX_EPOCH};
-        let dt = UNIX_EPOCH + Duration::from_secs(secs as u64);
-        let datetime: time_parts::Parts = time_parts::from_system_time(dt);
-        let date = format!(
-            "{:04}-{:02}-{:02}",
-            datetime.year, datetime.month, datetime.day
-        );
-        let time = format!(
-            "{:02}:{:02}:{:02}.{:03}",
-            datetime.hour,
-            datetime.minute,
-            datetime.second,
-            millis.abs()
-        );
-        (date, time)
-    }
-
-    mod time_parts {
-        use std::time::SystemTime;
-
-        // Very small date-time conversion (UTC) without external crates.
-        // Not leap-second aware; good enough for logging.
-        #[derive(Clone, Copy)]
-        pub struct Parts {
-            pub year: i32,
-            pub month: u32,
-            pub day: u32,
-            pub hour: u32,
-            pub minute: u32,
-            pub second: u32,
-        }
-
-        pub fn from_system_time(st: SystemTime) -> Parts {
-            // Use libc time functions via time_t conversion when available; otherwise, fallback.
-            // For portability in this simple example, we use the chrono-less algorithm based on days since epoch.
-            use std::time::{Duration, UNIX_EPOCH};
-            let dur = st
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or(Duration::from_secs(0));
-            let mut secs = dur.as_secs() as i64;
-
-            let second = (secs % 60) as u32;
-            secs /= 60;
-            let minute = (secs % 60) as u32;
-            secs /= 60;
-            let hour = (secs % 24) as u32;
-            secs /= 24;
-
-            // Days since 1970-01-01
-            let days = secs as i64;
-            let (year, month, day) = days_to_ymd(days + 719468); // shift to Civil (0000-03-01 base)
-
-            Parts {
-                year,
-                month,
-                day,
-                hour,
-                minute,
-                second,
-            }
-        }
-
-        // Algorithm adapted from Howard Hinnant's date algorithms (public domain)
-        fn days_to_ymd(mut z: i64) -> (i32, u32, u32) {
-            let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
-            let doe = z - era * 146097; // [0, 146096]
-            let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
-            let y = yoe as i32 + era as i32 * 400;
-            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-            let mp = (5 * doy + 2) / 153; // [0, 11]
-            let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-            let m = mp + if mp < 10 { 3 } else { -9 }; // [1, 12]
-            let year = y + (m <= 2) as i32;
-            let month = m as u32;
-            let day = d as u32;
-            (year, month, day)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::LogRecord;
     use super::{LogLevel, init_file_logger};
-    use super::{LogRecord, chrono_like};
+    use chrono::{SecondsFormat, Utc};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -369,12 +270,12 @@ mod tests {
         let content = fs::read_to_string(&path).expect("read log file");
 
         assert!(
-            content.contains("[INFO] hello info"),
+            content.contains("[INFO ] hello info"),
             "content=\n{}",
             content
         );
         assert!(
-            content.contains("[WARN] be careful"),
+            content.contains("[WARN ] be careful"),
             "content=\n{}",
             content
         );
@@ -396,8 +297,8 @@ mod tests {
     fn test_log_level_display_strings() {
         assert_eq!(format!("{}", LogLevel::Trace), "TRACE");
         assert_eq!(format!("{}", LogLevel::Debug), "DEBUG");
-        assert_eq!(format!("{}", LogLevel::Info), "INFO");
-        assert_eq!(format!("{}", LogLevel::Warn), "WARN");
+        assert_eq!(format!("{}", LogLevel::Info), "INFO ");
+        assert_eq!(format!("{}", LogLevel::Warn), "WARN ");
         assert_eq!(format!("{}", LogLevel::Error), "ERROR");
     }
 
@@ -410,6 +311,7 @@ mod tests {
             ts_millis: 0,
         };
         let line = rec.format_line().expect("line should exist for Message");
+        println!("{}", &line);
         assert!(line.contains("[DEBUG]"));
         assert!(line.contains("xyz"));
         assert!(line.contains("1970-01-01"));
@@ -418,9 +320,9 @@ mod tests {
         assert!(line.ends_with('\n'));
 
         // Also directly test the splitter
-        let (d, t) = chrono_like::split_iso8601(0);
-        assert_eq!(d, "1970-01-01");
-        assert!(t.starts_with("00:00:00."));
+        let date_time =
+            chrono::DateTime::<Utc>::from(UNIX_EPOCH).to_rfc3339_opts(SecondsFormat::Millis, true);
+        assert!(date_time.starts_with("1970-01-01T00:00:00.000Z"));
     }
 
     #[tokio::test]
@@ -441,8 +343,8 @@ mod tests {
         // Each level marker should appear at least once
         for (marker, msg) in [
             ("[TRACE]", "trace msg"),
-            ("[INFO]", "info msg"),
-            ("[WARN]", "warn msg"),
+            ("[INFO ]", "info msg"),
+            ("[WARN ]", "warn msg"),
             ("[ERROR]", "error msg"),
         ] {
             assert!(

@@ -1,11 +1,12 @@
 mod handlers;
-pub use handlers::Handleable;
+pub use handlers::AsyncHandleable;
+mod helpers;
 pub mod task_queue;
 
+use crate::core::tasks::task_queue::TaskQueue;
 use crate::err::Result;
-use crate::tasks::task_queue::TaskQueue;
 
-pub async fn init_core() -> Result<TaskQueue> {
+pub async fn init_task_queue() -> Result<TaskQueue> {
     Ok(TaskQueue::new(task_queue::TaskQueueConfig {
         queue_bound: 1024,
     }))

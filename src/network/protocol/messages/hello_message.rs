@@ -1,18 +1,19 @@
 use crate::err::Result;
+use crate::global_var::ENV_VAR;
 use crate::network::protocol::HandleableProtocol;
 use crate::network::protocol::protocol::Protocol;
 use crate::network::protocol::token::Token;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HelloMessage {
-    from_ip: String,
-    from_port: u16,
-    from_name: String,
-    mac_addr: String,
+    pub from_ip: String,
+    pub from_port: u16,
+    pub from_name: String,
+    pub mac_addr: String,
     // mode == 0: heartbeat, not request a hello reply
     // mode == 1: request a hello reply,
     // mode == 2: request a neighbor data update
-    mode: u8,
+    pub mode: u8,
 }
 
 impl HelloMessage {
@@ -30,6 +31,23 @@ impl HelloMessage {
             mac_addr,
             mode,
         }
+    }
+
+    pub fn from_env() -> Result<Self> {
+        if let Some(ev) = ENV_VAR.get() {
+            let from_ip = ev.get_ip_addr();
+            let from_port = ev.get_port();
+            let from_name = ev.get_machine_name();
+            let mac_addr = ev.get_mac_addr();
+            return Ok(HelloMessage::new(
+                from_ip.to_string(),
+                from_port,
+                from_name,
+                mac_addr,
+                0,
+            ));
+        }
+        Err("Fail to fetch env var".into())
     }
 }
 
