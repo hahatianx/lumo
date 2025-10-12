@@ -44,8 +44,8 @@ impl HelloMessage {
                 from_port,
                 from_name,
                 mac_addr,
-                0
-            ))
+                0,
+            ));
         }
         Err("Fail to fetch env var".into())
     }

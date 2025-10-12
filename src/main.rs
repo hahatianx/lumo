@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::config::{EnvVar, Opts, get_or_create_config};
-use crate::core::init_topology;
+use crate::core::{init_topology, PEER_TABLE};
 use crate::err::Result;
 use crate::fs::init_fs;
 use crate::global_var::{ENV_VAR, GLOBAL_VAR, GlobalVar, LOGGER, LOGGER_CELL};
@@ -145,6 +145,8 @@ async fn run_server() {
 
         println!("Sending message: {:?}", hello_message);
         let _ = sender.broadcast(bytes).await;
+
+        println!("PEER_TABLE: {:?}", PEER_TABLE);
 
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
