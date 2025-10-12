@@ -1,6 +1,5 @@
 use crate::config::APP_CONFIG;
 use crate::err::Result;
-use crate::global_var::ENV_VAR;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
@@ -14,6 +13,7 @@ use tokio::sync::RwLock;
 pub struct Peer {
     pub identifier: String,
 
+    pub peer_name: String,
     pub peer_addr: IpAddr,
 
     pub is_main: AtomicBool,
@@ -34,11 +34,12 @@ impl Debug for Peer {
         let date_time: DateTime<Utc> = time.into();
         write!(
             f,
-            "Peer {{ identifier: {}, peer_addr: {}, is_main: {}, is_active: {}, last_seen: {} }}",
-            self.identifier,
-            self.peer_addr,
-            self.is_main.load(Ordering::Relaxed),
-            self.is_active.load(Ordering::Relaxed),
+            "Peer {{ identifier: {}, name: {}, peer_addr: {}, is_main: {}, is_active: {}, last_seen: {} }}",
+            &self.identifier,
+            &self.peer_name,
+            &self.peer_addr,
+            &self.is_main.load(Ordering::Relaxed),
+            &self.is_active.load(Ordering::Relaxed),
             date_time.format("%Y-%m-%d %H:%M:%S")
         )
     }
@@ -59,13 +60,14 @@ impl PartialEq<Self> for Peer {
 impl Eq for Peer {}
 
 impl Peer {
-    pub fn new(identifier: String, peer_addr: IpAddr, is_main: bool) -> Self {
+    pub fn new(identifier: String, peer_name: String, peer_addr: IpAddr, is_main: bool) -> Self {
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
         Self {
             identifier,
+            peer_name,
             peer_addr,
             is_main: AtomicBool::new(is_main),
             is_active: AtomicBool::new(true),
@@ -116,15 +118,6 @@ impl PeerTable {
         }
     }
 
-    async fn add_peer(&self, peer: Peer) -> Result<()> {
-        let mut table = self.peers.write().await;
-        if table.contains_key(&peer.identifier) {
-            return Err(format!("Peer {} already exists", peer.identifier).into());
-        }
-        table.insert(peer.identifier.clone(), Arc::new(peer));
-        Ok(())
-    }
-
     pub async fn remove_peer(&self, peer: Peer) -> Result<()> {
         let mut table = self.peers.write().await;
         if !table.contains_key(&peer.identifier) {
@@ -136,9 +129,6 @@ impl PeerTable {
 
     pub async fn update_peer(&self, peer: Peer) -> Result<()> {
         let mut table = self.peers.write().await;
-        if !table.contains_key(&peer.identifier) {
-            return Err(format!("Peer {} does not exist", peer.identifier).into());
-        }
         table.insert(peer.identifier.clone(), Arc::new(peer));
         Ok(())
     }
@@ -275,7 +265,12 @@ mod tests {
         let offset_ms: i128 = (offset_min as i128) * 60_000i128;
         let last_seen_local_ms: u64 = (last_seen_utc_ms as i128 + offset_ms) as u64;
 
-        let mut peer = Peer::new("peer-1".into(), "127.0.0.1".parse().unwrap(), false);
+        let peer = Peer::new(
+            "peer-1".into(),
+            String::from("name"),
+            "127.0.0.1".parse().unwrap(),
+            false,
+        );
         peer.last_seen_ms
             .store(last_seen_local_ms, Ordering::Relaxed);
         peer.last_seen_tz_offset_minutes
@@ -307,7 +302,12 @@ mod tests {
             last_seen_local_ms_i128 as u64
         };
 
-        let mut peer = Peer::new("peer-2".into(), "127.0.0.1".parse().unwrap(), false);
+        let peer = Peer::new(
+            "peer-2".into(),
+            String::from("name"),
+            "127.0.0.1".parse().unwrap(),
+            false,
+        );
         peer.last_seen_ms
             .store(last_seen_local_ms, Ordering::Relaxed);
         peer.last_seen_tz_offset_minutes

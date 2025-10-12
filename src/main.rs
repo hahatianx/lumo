@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::config::{EnvVar, Opts, get_or_create_config};
+use crate::core::init_topology;
 use crate::err::Result;
 use crate::fs::init_fs;
 use crate::global_var::{ENV_VAR, GLOBAL_VAR, GlobalVar, LOGGER, LOGGER_CELL};
@@ -7,9 +8,9 @@ use crate::network::protocol::messages::HelloMessage;
 use crate::network::protocol::protocol::Protocol;
 use crate::network::{init_network, terminate_network};
 use bytes::Bytes;
-use tokio::{select, signal};
 use core::tasks::{init_task_queue, shutdown_core};
 use tokio::sync::Mutex;
+use tokio::{select, signal};
 
 mod config;
 mod core;
@@ -42,8 +43,11 @@ async fn init(config: &Config) -> Result<()> {
     //   2.1. Fail if working the directory does not exist
     //   2.2. Get or create .server director
     //   2.3. Set up external logger
-    // 3. Set up network initialization
-    // 4. File system initialization
+    // 3. Set up core
+    //   3.1. Set up a task queue
+    //   3.2. Set up a peer table
+    // 4. Set up network initialization
+    // 5. File system initialization
 
     // panic on failures
 
@@ -60,16 +64,25 @@ async fn init(config: &Config) -> Result<()> {
 
     // LOGGER enabled starting from this point
 
+    // Starts core initialization
     let task_queue = match init_task_queue().await {
-        Ok(task_queue) => task_queue,
+        Ok(task_queue) => {
+            LOGGER.info("Task queue initialized");
+            task_queue
+        }
         Err(e) => {
             LOGGER.error(format!("Failed to initialize task queue: {}", e));
             panic!("Failed to initialize task queue");
         }
     };
+    let _ = init_topology();
+    // Ends core initialization
 
     let network_setup = match init_network(&task_queue).await {
-        Ok(network_setup) => network_setup,
+        Ok(network_setup) => {
+            LOGGER.info("Network initialized");
+            network_setup
+        }
         Err(e) => {
             LOGGER.error(format!("Failed to initialize network: {}", e));
             panic!("Failed to initialize network");

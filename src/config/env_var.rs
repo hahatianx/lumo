@@ -85,14 +85,33 @@ impl EnvVar {
     pub async fn get_working_dir(&self) -> String {
         self.app_config.as_ref().read().await.working_dir.clone()
     }
+
     pub fn get_conn_token(&self) -> &str {
         &self.connection.conn_token
     }
+
     pub fn get_port(&self) -> u16 {
         self.connection.port
     }
+
     pub fn get_ip_addr(&self) -> IpAddr {
         self.connection.ip_addr
+    }
+
+    pub fn get_mac_addr(&self) -> String {
+        self.identity.mac_addr.clone()
+    }
+
+    pub fn get_machine_name(&self) -> String {
+        self.identity.machine_name.clone()
+    }
+
+    pub fn get_private_key_location(&self) -> String {
+        self.identity.key_spec.private_key_location.clone()
+    }
+
+    pub fn get_public_key_location(&self) -> String {
+        self.identity.key_spec.public_key_location.clone()
     }
 }
 

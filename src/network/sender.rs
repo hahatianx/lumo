@@ -225,7 +225,7 @@ async fn run_worker(mut rx: mpsc::Receiver<SendReq>, cfg: SenderConfig) {
     // Clean up: let UdpSockets drop here.
 }
 
-async fn send_with_timeout(mut sock: UdpSocket, bytes: &Bytes, to: Duration) -> Result<UdpSocket> {
+async fn send_with_timeout(sock: UdpSocket, bytes: &Bytes, to: Duration) -> Result<UdpSocket> {
     timeout(to, async {
         let _ = sock.send(bytes).await?;
         Ok::<_, crate::err::Error>(())

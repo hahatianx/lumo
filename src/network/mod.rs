@@ -1,6 +1,7 @@
 mod listener;
 pub mod protocol;
 mod sender;
+pub use sender::NetworkSender;
 mod util;
 
 use crate::core::tasks::task_queue::TaskQueue;
