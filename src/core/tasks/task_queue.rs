@@ -103,18 +103,13 @@ impl TaskQueue {
     }
 
     fn dispatch(mut msg: Box<dyn AsyncHandleable>) {
-        // We hop from the Tokio task onto an OS thread here. std::thread::spawn
-        // requires the closure (and everything it moves) to be 'static because the
-        // spawned thread can outlive the caller's stack frame. By taking a Box<dyn
-        // Handleable + Send + 'static>, we guarantee the message carries no
-        // borrows.
-        let _ = std::thread::spawn(async move || {
-            // Call the message handler in its own thread; log errors.
-            match msg.handle().await {
-                Ok(()) => {}
-                Err(e) => {
-                    LOGGER.error(format!("An error occurred while handling message {:?}", e));
-                }
+        // Run the async handler on the Tokio runtime.
+        tokio::spawn(async move {
+            if let Err(e) = msg.handle().await {
+                LOGGER.error(format!(
+                    "An error occurred while handling message: {:?}",
+                    e
+                ));
             }
         });
     }
