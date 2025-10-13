@@ -18,7 +18,7 @@ impl AsyncHandleable for HelloMessage {
 
         if self.mode == 1 {
             let sender = get_msg_sender().await?;
-            let resp = HelloMessage::from_env()?;
+            let resp = HelloMessage::from_env(0)?;
             let sock_addr = SocketAddr::V4(SocketAddrV4::new(
                 self.from_ip.parse().unwrap(),
                 self.from_port,

@@ -33,7 +33,7 @@ impl HelloMessage {
         }
     }
 
-    pub fn from_env() -> Result<Self> {
+    pub fn from_env(mode: u8) -> Result<Self> {
         if let Some(ev) = ENV_VAR.get() {
             let from_ip = ev.get_ip_addr();
             let from_port = ev.get_port();
@@ -44,7 +44,7 @@ impl HelloMessage {
                 from_port,
                 from_name,
                 mac_addr,
-                0,
+                mode,
             ));
         }
         Err("Fail to fetch env var".into())

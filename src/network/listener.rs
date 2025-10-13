@@ -5,6 +5,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use crate::constants::UPD_MESSAGE_PORT;
 
 /// UdpListener binds to an address and continuously listens for UDP datagrams.
 /// It can bind from ENV_VAR or from an explicit SocketAddr (useful for tests).
@@ -32,7 +33,7 @@ impl ListenerHandle {
 impl UdpListener {
     /// bind to any
     pub async fn bind() -> Result<Self> {
-        let (ip, port) = (IpAddr::V4(Ipv4Addr::UNSPECIFIED), 14514);
+        let (ip, port) = (IpAddr::V4(Ipv4Addr::UNSPECIFIED), UPD_MESSAGE_PORT);
         let addr = SocketAddr::new(ip, port);
         LOGGER.info(format!("Binding UDP listener to {}", addr));
         let socket = UdpSocket::bind(addr).await?;

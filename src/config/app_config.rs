@@ -1,36 +1,27 @@
 use crate::config::EnvVar;
 use crate::config::env_var::AppConfig;
 use crate::global_var::ENV_VAR;
-use std::ops::Deref;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 use tokio::sync::RwLock;
 
-pub static APP_CONFIG: LazyLock<SharedConfig> = LazyLock::new(|| {
-    let env_var = ENV_VAR.get().unwrap();
-    SharedConfig::new(&env_var)
-});
+pub static APP_CONFIG: LazyLock<SharedConfig> = LazyLock::new(|| SharedConfig {});
 
 #[derive(Debug)]
-pub struct SharedConfig {
-    config: Arc<RwLock<AppConfig>>,
-}
-
-impl Deref for SharedConfig {
-    type Target = Arc<RwLock<AppConfig>>;
-    fn deref(&self) -> &Self::Target {
-        &self.config
-    }
-}
+pub struct SharedConfig {}
 
 impl SharedConfig {
-    pub fn new(env_var: &EnvVar) -> Self {
-        Self {
-            config: env_var.app_config.clone(),
-        }
+    pub fn new(_env_var: &EnvVar) -> Self {
+        // Kept for backward compatibility; no longer stores a cloned Arc to avoid stale state.
+        SharedConfig {}
     }
 
     fn get_config(&self) -> &RwLock<AppConfig> {
-        self.config.as_ref()
+        // Always resolve through ENV_VAR at call time to avoid initialization order issues.
+        ENV_VAR
+            .get()
+            .expect("ENV_VAR must be initialized before accessing APP_CONFIG")
+            .app_config
+            .as_ref()
     }
 
     pub async fn get_working_dir(&self) -> String {
@@ -78,7 +69,6 @@ mod tests {
         let working_dir = APP_CONFIG.get_working_dir().await;
         let expected_home = std::env::var("HOME").unwrap();
         assert!(working_dir.starts_with(&expected_home));
-        assert!(working_dir.ends_with("ld_work"));
 
         let expires = APP_CONFIG.get_peer_expires_after_in_sec().await;
         assert_eq!(

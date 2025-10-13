@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::config::{EnvVar, Opts, get_or_create_config};
+use crate::core::tasks::init_jobs;
 use crate::core::{PEER_TABLE, init_topology};
 use crate::err::Result;
 use crate::fs::init_fs;
@@ -11,7 +12,6 @@ use bytes::Bytes;
 use core::tasks::{init_task_queue, shutdown_core};
 use tokio::sync::Mutex;
 use tokio::{select, signal};
-use crate::core::tasks::init_jobs;
 
 mod config;
 mod core;
@@ -20,6 +20,7 @@ mod fs;
 mod global_var;
 mod network;
 mod utilities;
+mod constants;
 
 fn print_version_and_exit() -> ! {
     // These are set by build.rs; fall back to unknown if missing
@@ -125,28 +126,7 @@ async fn system_shutdown() {
 
 async fn run_server() {
     loop {
-        let hello_message = HelloMessage::new(
-            "127.0.0.1".to_string(),
-            8080,
-            String::from("Mac"),
-            String::from(ENV_VAR.get().unwrap().get_conn_token()),
-            0,
-        );
 
-        let bytes = Bytes::from(hello_message.serialize());
-        let sender = &GLOBAL_VAR
-            .get()
-            .unwrap()
-            .network_setup
-            .lock()
-            .await
-            .as_ref()
-            .unwrap()
-            .sender
-            .sender();
-
-        println!("Sending message: {:?}", hello_message);
-        let _ = sender.broadcast(bytes).await;
 
         println!("PEER_TABLE: {:?}", PEER_TABLE);
 

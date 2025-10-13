@@ -5,6 +5,7 @@ use crate::network::get_private_ipv4_with_mac;
 use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use crate::constants::{TCP_FILE_PORT, UPD_MESSAGE_PORT};
 
 #[derive(Debug)]
 struct KeySpec {
@@ -71,8 +72,8 @@ impl EnvVar {
             },
             connection: ConnectionConfig {
                 conn_token: config.connection.conn_token.clone(),
-                port: 14514, // reserved port for server to listen on protocol messages
-                file_sync_port: 11451, // reserved port for file sync
+                port: UPD_MESSAGE_PORT, // reserved port for server to listen on protocol messages
+                file_sync_port: TCP_FILE_PORT, // reserved port for file sync
                 ip_addr: IpAddr::V4(ipv4),
             },
             app_config: Arc::new(RwLock::new(AppConfig {

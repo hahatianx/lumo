@@ -1,3 +1,4 @@
+use crate::core::tasks::jobs::{job_peer_table_anti_entropy, launch_periodic_job};
 use crate::core::tasks::task_queue::TaskQueue;
 use crate::err::Result;
 use crate::global_var::LOGGER;
@@ -5,9 +6,8 @@ use std::cmp::PartialEq;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, LazyLock};
 use tokio::sync::RwLock;
-use crate::core::tasks::jobs::{job_peer_table_anti_entropy, launch_periodic_job};
 
-static JOB_TABLE: LazyLock<JobTable> = LazyLock::new(|| JobTable::new());
+pub static JOB_TABLE: LazyLock<JobTable> = LazyLock::new(|| JobTable::new());
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum JobStatus {
@@ -100,8 +100,7 @@ impl JobSummary {
     }
 }
 
-
-struct JobTable {
+pub struct JobTable {
     jobs: RwLock<Vec<Arc<JobSummary>>>,
 }
 
@@ -127,24 +126,4 @@ impl JobTable {
         }
         Ok(())
     }
-}
-
-pub async fn init_jobs(task_queue: &TaskQueue) -> Result<()> {
-
-    let peer_table_anti_entropy_job = launch_periodic_job(
-        "Peer table anti-entropy",
-        "Scans and invalidates expired peers in a periodic fashion",
-        job_peer_table_anti_entropy,
-        60,
-        task_queue.sender(),
-    ).await?;
-    let _ = JOB_TABLE.insert_job(peer_table_anti_entropy_job).await?;
-
-    JOB_TABLE.print_jobs().await?;
-
-    Ok(())
-}
-
-pub async fn shutdown_jobs() -> Result<()> {
-    Ok(())
 }

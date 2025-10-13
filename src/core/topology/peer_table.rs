@@ -222,6 +222,19 @@ impl PeerTable {
                 }
             }
         }
+
+        // 3) Re-acquire the lock and remove inactive peers
+        {
+            let mut table = self.peers.write().await;
+            let in_active_peers: Vec<Arc<Peer>> = table
+                .values()
+                .filter(|p| !p.is_active.load(Ordering::Relaxed))
+                .cloned()
+                .collect();
+            for peer in in_active_peers {
+                table.remove(&peer.identifier);
+            }
+        }
         Ok(())
     }
 
@@ -403,15 +416,6 @@ mod tests {
         // Verify results
         let valid_peer = table.get_peer("valid").await.expect("valid peer not found");
         assert!(valid_peer.is_active.load(Ordering::Relaxed));
-
-        let expired_peer_arc = table
-            .peers
-            .read()
-            .await
-            .get("expired")
-            .cloned()
-            .expect("expired peer should exist");
-        assert!(!expired_peer_arc.is_active.load(Ordering::Relaxed));
     }
 
     #[tokio::test]

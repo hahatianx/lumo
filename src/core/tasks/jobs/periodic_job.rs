@@ -5,8 +5,12 @@ use crate::err::Result;
 use crate::global_var::LOGGER;
 use async_trait::async_trait;
 use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 use tokio::select;
+
+// A boxed closure that yields a boxed, pinned Future resolving to Result<()>.
+pub type JobClosure = dyn FnMut() -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> + Send + 'static;
 
 /// A periodic async job wrapper that repeatedly runs an async function and sleeps between runs.
 pub struct PeriodicJob<J, F>
