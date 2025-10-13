@@ -200,6 +200,35 @@ impl PeerTable {
             None => Err(format!("Peer {} does not exist", identifier).into()),
         }
     }
+
+    pub async fn peer_table_anti_entropy(&self) -> Result<()> {
+        // 1) Collect active peers under a short-lived read lock (no .await inside the lock)
+        let active_peers: Vec<Arc<Peer>> = {
+            let table = self.peers.read().await;
+            table
+                .values()
+                .filter(|p| p.is_active.load(Ordering::Relaxed))
+                .cloned()
+                .collect()
+        };
+
+        // 2) Drop the lock before awaiting. Now check validity and disable as needed.
+        for peer in active_peers {
+            if !peer.peer_valid().await {
+                // We already hold an Arc to the peer; disabling is just an atomic store.
+                // This avoids re-locking the table while we might be in an .await chain.
+                if peer.is_active.load(Ordering::Relaxed) {
+                    peer.is_active.store(false, Ordering::Relaxed);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn get_peers(&self) -> Vec<Arc<Peer>> {
+        let table = self.peers.read().await;
+        table.values().cloned().collect()
+    }
 }
 
 impl Debug for PeerTable {
@@ -314,5 +343,117 @@ mod tests {
             .store(offset_min, Ordering::Relaxed);
 
         assert!(!peer.peer_valid().await, "peer should be expired after 60s");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn peer_table_anti_entropy_disables_only_expired_peers() {
+        ensure_env_and_set_expiry(60).await;
+
+        let table = PeerTable::new();
+
+        // Setup a valid peer (seen 30s ago, UTC+1)
+        let now_ms_utc: u64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let valid_last_seen_utc = now_ms_utc.saturating_sub(30_000);
+        let valid_offset_min = 60; // UTC+1
+        let valid_last_seen_local: u64 =
+            (valid_last_seen_utc as i128 + (valid_offset_min as i128) * 60_000i128) as u64;
+
+        let mut p1 = Peer::new(
+            "valid".into(),
+            "p1".into(),
+            "127.0.0.1".parse().unwrap(),
+            false,
+        );
+        p1.last_seen_ms
+            .store(valid_last_seen_local, Ordering::Relaxed);
+        p1.last_seen_tz_offset_minutes
+            .store(valid_offset_min, Ordering::Relaxed);
+        table.update_peer(p1).await.unwrap();
+
+        // Setup an expired peer (seen 70s ago, UTC-2)
+        let expired_last_seen_utc = now_ms_utc.saturating_sub(70_000);
+        let expired_offset_min = -120; // UTC-2
+        let expired_last_seen_local_i: i128 =
+            expired_last_seen_utc as i128 + (expired_offset_min as i128) * 60_000i128;
+        let expired_last_seen_local: u64 = if expired_last_seen_local_i < 0 {
+            0
+        } else {
+            expired_last_seen_local_i as u64
+        };
+
+        let mut p2 = Peer::new(
+            "expired".into(),
+            "p2".into(),
+            "127.0.0.1".parse().unwrap(),
+            false,
+        );
+        p2.last_seen_ms
+            .store(expired_last_seen_local, Ordering::Relaxed);
+        p2.last_seen_tz_offset_minutes
+            .store(expired_offset_min, Ordering::Relaxed);
+        table.update_peer(p2).await.unwrap();
+
+        // Run anti-entropy
+        table.peer_table_anti_entropy().await.unwrap();
+
+        // Verify results
+        let valid_peer = table.get_peer("valid").await.expect("valid peer not found");
+        assert!(valid_peer.is_active.load(Ordering::Relaxed));
+
+        let expired_peer_arc = table
+            .peers
+            .read()
+            .await
+            .get("expired")
+            .cloned()
+            .expect("expired peer should exist");
+        assert!(!expired_peer_arc.is_active.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn peer_table_anti_entropy_completes_without_deadlock() {
+        ensure_env_and_set_expiry(1).await; // make validation cheap
+
+        let table = PeerTable::new();
+        // Insert a bunch of peers to exercise the loop
+        for i in 0..50u32 {
+            let mut p = Peer::new(
+                format!("p-{i}"),
+                "n".into(),
+                "127.0.0.1".parse().unwrap(),
+                false,
+            );
+            // Make half expired, half valid
+            let now_ms_utc: u64 = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            if i % 2 == 0 {
+                // expired: seen 5s ago with 0s expiry
+                let last_seen = now_ms_utc.saturating_sub(5_000);
+                p.last_seen_ms.store(last_seen, Ordering::Relaxed);
+                p.last_seen_tz_offset_minutes.store(0, Ordering::Relaxed);
+            } else {
+                // valid: seen now
+                p.last_seen_ms.store(now_ms_utc, Ordering::Relaxed);
+                p.last_seen_tz_offset_minutes.store(0, Ordering::Relaxed);
+            }
+            table.update_peer(p).await.unwrap();
+        }
+
+        // If anti-entropy held the lock across await, this timeout would likely trigger under CI.
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            table.peer_table_anti_entropy(),
+        )
+        .await;
+        assert!(res.is_ok(), "anti-entropy timed out (possible deadlock)");
+        // Also ensure we can concurrently read while it runs (no deadlock). Do a quick read now.
+        let _ = table.peers.read().await; // should not hang
     }
 }

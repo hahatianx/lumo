@@ -11,6 +11,7 @@ use bytes::Bytes;
 use core::tasks::{init_task_queue, shutdown_core};
 use tokio::sync::Mutex;
 use tokio::{select, signal};
+use crate::core::tasks::init_jobs;
 
 mod config;
 mod core;
@@ -76,6 +77,7 @@ async fn init(config: &Config) -> Result<()> {
         }
     };
     let _ = init_topology();
+    let _ = init_jobs(&task_queue).await;
     // Ends core initialization
 
     let network_setup = match init_network(&task_queue).await {

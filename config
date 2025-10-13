@@ -1,0 +1,10 @@
+[identity]
+machine_name = "qaq"
+private_key_loc = "qaq"
+public_key_loc = "qaq"
+
+[connection]
+conn_token = "qaq"
+
+[app_config]
+working_dir = "~/SharedDisc"

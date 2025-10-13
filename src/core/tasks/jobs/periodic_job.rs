@@ -1,5 +1,5 @@
 use crate::core::tasks::AsyncHandleable;
-use crate::core::tasks::jobs::JobSummary;
+use crate::core::tasks::job_summary::{JobSummary, JobType};
 use crate::core::tasks::task_queue::TaskQueueSender;
 use crate::err::Result;
 use crate::global_var::LOGGER;
@@ -48,7 +48,16 @@ where
 {
     async fn handle(&mut self) -> Result<()> {
         loop {
-            (self.job)().await?;
+            // Do not
+            match (self.job)().await {
+                Ok(()) => {
+                    LOGGER.info(format!("Job {} completed successfully.", &self.job_name));
+                }
+                Err(job_err) => {
+                    // We don't want a single job execution failure to crash the periodic job runs.
+                    LOGGER.error(format!("Job {} failed: {}", &self.job_name, job_err));
+                }
+            }
             select! {
                 biased;
                 _ = &mut self.shutdown_rx => {
@@ -81,8 +90,9 @@ where
 
     Ok(JobSummary::new(
         String::from(job_name),
-        period,
         String::from(summary),
+        JobType::Periodic,
+        period,
         shutdown_tx,
     ))
 }
@@ -90,8 +100,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
     use crate::core::tasks::task_queue::{TaskQueue, TaskQueueConfig};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     #[tokio::test]
     async fn periodic_job_handle_runs_and_shutdowns() -> Result<()> {
@@ -144,12 +157,17 @@ mod tests {
             job,
             0,
             sender,
-        ).await?;
+        )
+        .await?;
 
         // Let it run a bit
         tokio::time::sleep(Duration::from_millis(40)).await;
         let runs = counter.load(Ordering::SeqCst);
-        assert!(runs >= 1, "expected at least one run in queue, got {}", runs);
+        assert!(
+            runs >= 1,
+            "expected at least one run in queue, got {}",
+            runs
+        );
 
         // Shutdown the periodic job via returned summary and then the queue
         summary.shutdown().await?;
