@@ -11,7 +11,8 @@ pub static JOB_TABLE: LazyLock<JobTable> = LazyLock::new(|| JobTable::new());
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum JobStatus {
-    Running = 0,
+    Pending = 0,
+    Running,
     Completed,
     Failed,
     TimedOut,
@@ -36,7 +37,7 @@ pub struct JobSummary {
     period: Option<chrono::Duration>,
     summary: String,
 
-    shutdown_tx: tokio::sync::oneshot::Sender<()>,
+    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl Debug for JobSummary {
@@ -66,7 +67,7 @@ impl JobSummary {
             job_type,
             period,
             summary,
-            shutdown_tx,
+            shutdown_tx: Some(shutdown_tx),
         }
     }
 
@@ -74,7 +75,7 @@ impl JobSummary {
         self.status = new_status;
     }
 
-    pub async fn end_job(&mut self, status: JobStatus) -> Result<()> {
+    pub async fn end_job(&mut self, status: JobStatus, status_msg: String) -> Result<()> {
         if self.status != JobStatus::Running {
             let error_msg = format!(
                 "Failed to end job {} because it's not running. Status found: {:?}",
@@ -86,6 +87,7 @@ impl JobSummary {
         let end_time = chrono::Utc::now();
         self.complete_time = Some(end_time);
         self.status = status;
+        self.status_msg = Some(status_msg);
         Ok(())
     }
 
@@ -93,15 +95,18 @@ impl JobSummary {
         self.status_msg = Some(status_msg);
     }
 
-    pub async fn shutdown(mut self) -> Result<()> {
-        self.end_job(JobStatus::Shutdown).await?;
-        let _ = self.shutdown_tx.send(());
+    pub async fn shutdown(&mut self) -> Result<()> {
+        self.end_job(JobStatus::Shutdown, String::from("Shutdown by system"))
+            .await?;
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
         Ok(())
     }
 }
 
 pub struct JobTable {
-    jobs: RwLock<Vec<Arc<JobSummary>>>,
+    jobs: RwLock<Vec<Arc<RwLock<JobSummary>>>>,
 }
 
 impl JobTable {
@@ -112,11 +117,21 @@ impl JobTable {
     }
 
     pub async fn insert_job(&self, job: JobSummary) -> Result<u32> {
-        let ar_job = Arc::new(job);
-        let mut table = self.jobs.write().await;
-        table.push(ar_job.clone());
-        let job_idx = table.len() as u32 - 1;
-        Ok(job_idx)
+        let ar_job = Arc::new(RwLock::new(job));
+        {
+            let mut table = self.jobs.write().await;
+            table.push(ar_job.clone());
+            let job_idx = table.len() as u32 - 1;
+            Ok(job_idx)
+        }
+    }
+
+    pub async fn get_job(&self, job_idx: u32) -> Result<Arc<RwLock<JobSummary>>> {
+        let table = self.jobs.read().await;
+        if job_idx >= table.len() as u32 {
+            return Err(format!("Job index {} is out of range", job_idx).into());
+        }
+        Ok(table[job_idx as usize].clone())
     }
 
     pub async fn print_jobs(&self) -> Result<()> {

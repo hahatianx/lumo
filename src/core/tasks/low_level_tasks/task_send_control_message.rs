@@ -1,6 +1,6 @@
 use crate::core::tasks::AsyncHandleable;
 use crate::err::Result;
-use crate::global_var::{GLOBAL_VAR, GlobalVar, LOGGER};
+use crate::global_var::{GLOBAL_VAR, GlobalVar, LOGGER, get_msg_sender};
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::net::SocketAddr;
@@ -24,16 +24,7 @@ impl SendControlMessageTask {
 #[async_trait]
 impl AsyncHandleable for SendControlMessageTask {
     async fn handle(&mut self) -> Result<()> {
-        let udp_sender = GLOBAL_VAR
-            .get()
-            .unwrap()
-            .network_setup
-            .lock()
-            .await
-            .as_ref()
-            .unwrap()
-            .sender
-            .sender();
+        let udp_sender = get_msg_sender().await?;
 
         // Move ownership of the payload out of self by replacing it with an empty Bytes.
         let bytes = std::mem::take(&mut self.bytes);

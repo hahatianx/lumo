@@ -1,31 +1,21 @@
 use crate::core::PEER_TABLE;
-use crate::core::tasks::jobs::periodic_job::JobClosure;
+use crate::core::tasks::jobs::JobClosure;
 use crate::core::tasks::low_level_tasks::{SendControlMessageTask, SendType};
 use crate::core::tasks::task_queue::TaskQueue;
 use crate::err::Result;
+use crate::global_var::LOGGER;
 use crate::network::protocol::messages::HelloMessage;
 use crate::network::protocol::protocol::Protocol;
 use bytes::Bytes;
 use std::future::Future;
-use std::net::IpAddr::{V4, V6};
-use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
-use crate::constants::UPD_MESSAGE_PORT;
-use crate::global_var::LOGGER;
 
 pub async fn get_job_heartbeat_closure(task_q: &TaskQueue) -> Result<Box<JobClosure>> {
     let task_q_sender = task_q.sender();
-
-    // At the beginning of the job, send a broadcast HelloMessage to all nodes in the network.  The message requires response.
-    let first_hello_message = HelloMessage::from_env(1)?;
-    let b = Bytes::from(first_hello_message.serialize());
-    task_q_sender.send(Box::new(SendControlMessageTask::new(SendType::Broadcast, b.clone()))).await?;
-
     // Return a closure compatible with launch_periodic_job: FnMut() -> Future<Output = Result<()>>
     let closure = move || {
         let cloned_task_q_sender = task_q_sender.clone();
         let fut: std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> =
             Box::pin(async move {
-
                 let active_peers = PEER_TABLE
                     .get_peers()
                     .await
@@ -39,21 +29,36 @@ pub async fn get_job_heartbeat_closure(task_q: &TaskQueue) -> Result<Box<JobClos
                 let hello_message = HelloMessage::from_env(0)?;
                 let bytes = Bytes::from(hello_message.serialize());
 
-                for peer in active_peers {
-                    let peer_sock = match peer.peer_addr {
-                        V4(ipv4) => SocketAddr::V4(SocketAddrV4::new(ipv4, UPD_MESSAGE_PORT)),
-                        V6(ipv6) => SocketAddr::V6(SocketAddrV6::new(ipv6, UPD_MESSAGE_PORT, 0, 0)),
-                    };
+                let task =
+                    SendControlMessageTask::new(SendType::Broadcast, bytes.clone());
 
-                    LOGGER.debug(format!("Sending HelloMessage to peer {}, message {:?}", peer_sock, &hello_message));
-
-                    let task =
-                        SendControlMessageTask::new(SendType::Unicast(peer_sock), bytes.clone());
-
-                    cloned_task_q_sender.send(Box::new(task)).await?;
-                }
+                cloned_task_q_sender.send(Box::new(task)).await?;
 
                 Ok(())
+            });
+        fut
+    };
+
+    Ok(Box::new(closure))
+}
+
+
+pub async fn get_first_hello_message_closure(task_q: &TaskQueue) -> Result<Box<JobClosure>> {
+    let task_q_sender = task_q.sender();
+
+    let closure = move || {
+        let cloned_task_q_sender = task_q_sender.clone();
+        let fut: std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> =
+            Box::pin(async move {
+                // At the beginning of the job, send a broadcast HelloMessage to all nodes in the network.  The message requires response.
+                let first_hello_message = HelloMessage::from_env(1)?;
+                let b = Bytes::from(first_hello_message.serialize());
+                cloned_task_q_sender
+                    .send(Box::new(SendControlMessageTask::new(
+                        SendType::Broadcast,
+                        b.clone(),
+                    )))
+                    .await
             });
         fut
     };

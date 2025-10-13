@@ -14,13 +14,13 @@ use tokio::sync::Mutex;
 use tokio::{select, signal};
 
 mod config;
+mod constants;
 mod core;
 mod err;
 mod fs;
 mod global_var;
 mod network;
 mod utilities;
-mod constants;
 
 fn print_version_and_exit() -> ! {
     // These are set by build.rs; fall back to unknown if missing
@@ -126,8 +126,6 @@ async fn system_shutdown() {
 
 async fn run_server() {
     loop {
-
-
         println!("PEER_TABLE: {:?}", PEER_TABLE);
 
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;

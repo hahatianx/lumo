@@ -16,7 +16,8 @@ impl AsyncHandleable for HelloMessage {
         LOGGER.debug(format!("HelloMessage: {:?}", self));
         update_peer_table(&self).await?;
 
-        if self.mode == 1 {
+        if self.mode == 1u8 {
+            LOGGER.debug("Received a hello message requiring response.");
             let sender = get_msg_sender().await?;
             let resp = HelloMessage::from_env(0)?;
             let sock_addr = SocketAddr::V4(SocketAddrV4::new(

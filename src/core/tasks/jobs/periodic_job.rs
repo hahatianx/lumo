@@ -1,16 +1,12 @@
 use crate::core::tasks::AsyncHandleable;
-use crate::core::tasks::job_summary::{JobSummary, JobType};
+use crate::core::tasks::job_summary::{JOB_TABLE, JobSummary, JobType};
 use crate::core::tasks::task_queue::TaskQueueSender;
 use crate::err::Result;
 use crate::global_var::LOGGER;
 use async_trait::async_trait;
 use std::future::Future;
-use std::pin::Pin;
 use std::time::Duration;
 use tokio::select;
-
-// A boxed closure that yields a boxed, pinned Future resolving to Result<()>.
-pub type JobClosure = dyn FnMut() -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> + Send + 'static;
 
 /// A periodic async job wrapper that repeatedly runs an async function and sleeps between runs.
 pub struct PeriodicJob<J, F>
@@ -81,30 +77,31 @@ pub async fn launch_periodic_job<J, F>(
     job: J,
     period_in_seconds: u64,
     task_queue_sender: TaskQueueSender,
-) -> Result<JobSummary>
+) -> Result<u32>
 where
     J: FnMut() -> F + Send + 'static,
     F: Future<Output = Result<()>> + Send + 'static,
 {
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let job = PeriodicJob::new(String::from(job_name), job, period_in_seconds, shutdown_rx);
-    task_queue_sender.send(Box::new(job)).await?;
-
     let period = Some(chrono::Duration::seconds(period_in_seconds as i64));
 
-    Ok(JobSummary::new(
+    let job_summary = JobSummary::new(
         String::from(job_name),
         String::from(summary),
         JobType::Periodic,
         period,
         shutdown_tx,
-    ))
+    );
+    task_queue_sender.send(Box::new(job)).await?;
+    Ok(JOB_TABLE.insert_job(job_summary).await?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::tasks::task_queue::{TaskQueue, TaskQueueConfig};
+    use std::mem::take;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -155,7 +152,7 @@ mod tests {
             }
         };
 
-        let summary = launch_periodic_job(
+        let summary_idx = launch_periodic_job(
             "integration-job",
             "periodic integration test",
             job,
@@ -173,8 +170,9 @@ mod tests {
             runs
         );
 
+        let summary = JOB_TABLE.get_job(summary_idx).await?;
         // Shutdown the periodic job via returned summary and then the queue
-        summary.shutdown().await?;
+        summary.write().await.shutdown().await?;
         q.shutdown().await?;
         Ok(())
     }

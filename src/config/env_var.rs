@@ -1,11 +1,11 @@
 use crate::config::config::Config;
+use crate::constants::{TCP_FILE_PORT, UPD_MESSAGE_PORT};
 use crate::err::Result;
 use crate::fs::util::expand_tilde;
 use crate::network::get_private_ipv4_with_mac;
 use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::constants::{TCP_FILE_PORT, UPD_MESSAGE_PORT};
 
 #[derive(Debug)]
 struct KeySpec {

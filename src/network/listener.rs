@@ -1,3 +1,4 @@
+use crate::constants::UPD_MESSAGE_PORT;
 use crate::err::Result;
 use crate::global_var::LOGGER;
 use bytes::Bytes;
@@ -5,7 +6,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use crate::constants::UPD_MESSAGE_PORT;
 
 /// UdpListener binds to an address and continuously listens for UDP datagrams.
 /// It can bind from ENV_VAR or from an explicit SocketAddr (useful for tests).

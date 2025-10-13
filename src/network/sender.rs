@@ -1,3 +1,4 @@
+use crate::constants::UPD_MESSAGE_PORT;
 use crate::err::Result;
 use crate::global_var::ENV_VAR;
 use bytes::Bytes;
@@ -8,7 +9,6 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
-use crate::constants::UPD_MESSAGE_PORT;
 
 /// NetworkSender provides two patterns for sending UDP requests using Tokio:
 /// - Queued single-consumer worker (default): provides backpressure, connection reuse, and ordering per destination.
@@ -106,7 +106,10 @@ impl NetworkSender {
     pub async fn broadcast(&self, bytes: Bytes) -> Result<()> {
         // Send the payload to 255.255.255.255:<port>. If ENV_VAR is not initialized (e.g., in tests),
         // fall back to the conventional default port used by this project (14514).
-        let port = ENV_VAR.get().map(|ev| ev.get_port()).unwrap_or(UPD_MESSAGE_PORT);
+        let port = ENV_VAR
+            .get()
+            .map(|ev| ev.get_port())
+            .unwrap_or(UPD_MESSAGE_PORT);
         let broadcast_ip = IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255));
         let addr = SocketAddr::new(broadcast_ip, port);
         self.send(addr, bytes.clone()).await?;

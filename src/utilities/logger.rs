@@ -30,6 +30,7 @@
 //! }
 //! ```
 
+use std::cmp::PartialEq;
 use crate::err::Result;
 use crate::global_var::{DEBUG_MODE, LOGGER_CELL};
 use chrono::{DateTime, Utc};
@@ -38,11 +39,11 @@ use std::ops::Deref;
 use std::path::Path;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncWriteExt, BufWriter};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
 /// Log level for messages.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogLevel {
     Trace,
     Debug,
@@ -74,9 +75,6 @@ impl AsyncLogger {
     /// Log a message at a specific level.
     fn log<S: Into<String>>(&self, level: LogLevel, msg: S) {
         let str_msg = msg.into();
-        if *DEBUG_MODE {
-            println!("{}: {}", level, &str_msg);
-        }
         match self.tx.try_send(LogRecord::new(level, str_msg)) {
             Ok(_) => {}
             Err(err) => {
@@ -161,35 +159,19 @@ pub async fn init_file_logger<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, J
         .await?;
 
     let (tx, mut rx) = mpsc::channel::<LogRecord>(1024);
-    let mut writer = BufWriter::new(file);
+    let writer = Mutex::new(BufWriter::new(file));
 
     let task = tokio::spawn(async move {
         while let Some(rec) = rx.recv().await {
-            match rec {
-                LogRecord::Message { .. } => {
+            match &rec {
+                LogRecord::Message { level, msg, ts_millis } => {
                     if let Some(line) = rec.format_line() {
-                        if let Err(_e) = writer.write_all(line.as_bytes()).await {
-                            // Attempt to recover: flush, reopen the file, swap the writer, and retry once.
-                            let _ = writer.flush().await;
-                            match OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(&path_buf)
-                                .await
-                            {
-                                Ok(new_file) => {
-                                    writer = BufWriter::new(new_file);
-                                    // Best-effort: try to write the original line again; if it fails, drop it.
-                                    let _ = writer.write_all(line.as_bytes()).await;
-                                }
-                                Err(_) => {
-                                    // Couldn't reopen. Drop the message and avoid tight loop.
-                                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                                }
-                            }
+                        {
+                            let mut unique_writer = writer.lock().await;
+                            let _ = unique_writer.write_all(line.as_bytes()).await;
+                            let _ = unique_writer.flush().await;
                         }
                     }
-                    let _ = writer.flush().await;
                 }
                 LogRecord::Shutdown => {
                     break;
@@ -197,7 +179,10 @@ pub async fn init_file_logger<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, J
             }
         }
         // Flush remaining data before exit
-        let _ = writer.flush().await;
+        {
+            let mut unique_writer = writer.lock().await;
+            let _ = unique_writer.flush().await;
+        }
     });
 
     Ok((AsyncLogger { tx }, task))
