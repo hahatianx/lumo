@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::config::{EnvVar, Opts, get_or_create_config};
-use crate::core::tasks::init_jobs;
+use crate::core::tasks::{init_jobs, JOB_TABLE};
 use crate::core::{PEER_TABLE, init_topology};
 use crate::err::Result;
 use crate::fs::init_fs;
@@ -78,7 +78,6 @@ async fn init(config: &Config) -> Result<()> {
         }
     };
     let _ = init_topology();
-    let _ = init_jobs(&task_queue).await;
     // Ends core initialization
 
     let network_setup = match init_network(&task_queue).await {
@@ -91,6 +90,8 @@ async fn init(config: &Config) -> Result<()> {
             panic!("Failed to initialize network");
         }
     };
+    
+    let _ = init_jobs(&task_queue).await;
 
     let global_var = GlobalVar {
         logger_handle: Mutex::new(Some(logger_handle)),
@@ -127,6 +128,8 @@ async fn system_shutdown() {
 async fn run_server() {
     loop {
         println!("PEER_TABLE: {:?}", PEER_TABLE);
+
+        println!("JOB LIST: {:?}", JOB_TABLE);
 
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }

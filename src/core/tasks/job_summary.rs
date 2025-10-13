@@ -1,5 +1,3 @@
-use crate::core::tasks::jobs::{job_peer_table_anti_entropy, launch_periodic_job};
-use crate::core::tasks::task_queue::TaskQueue;
 use crate::err::Result;
 use crate::global_var::LOGGER;
 use std::cmp::PartialEq;
@@ -44,8 +42,8 @@ impl Debug for JobSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            " {{ JobSummary job_name: {}, launched_time: {} }}",
-            &self.job_name, &self.launched_time
+            " {{ JobSummary job_name: {}, launched_time: {}, complete_time: {:?}, job_status: {:?}, msg: {:?} }}\n",
+            &self.job_name, &self.launched_time, &self.complete_time, &self.status, &self.status_msg
         )
     }
 }
@@ -107,6 +105,31 @@ impl JobSummary {
 
 pub struct JobTable {
     jobs: RwLock<Vec<Arc<RwLock<JobSummary>>>>,
+}
+
+impl Debug for JobTable {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+
+        match &self.jobs.try_read() {
+            Ok(jobs) => {
+                for job in jobs.iter() {
+                    match job.try_read() {
+                        Ok(job) => {
+                            let _ = write!(f, "{:?}", &job);
+                        }
+                        Err(_e) => {
+                            let _ = write!(f, "<Locked>");
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Err(_e) => {
+                write!(f, "<Locked>")
+            }
+        }
+
+    }
 }
 
 impl JobTable {
