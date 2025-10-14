@@ -30,16 +30,16 @@
 //! }
 //! ```
 
-use std::cmp::PartialEq;
 use crate::err::Result;
 use crate::global_var::{DEBUG_MODE, LOGGER_CELL};
 use chrono::{DateTime, Utc};
+use std::cmp::PartialEq;
 use std::fmt;
 use std::ops::Deref;
 use std::path::Path;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncWriteExt, BufWriter};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 
 /// Log level for messages.
@@ -136,9 +136,9 @@ impl LogRecord {
                 ts_millis,
             } => {
                 // Format: 2025-10-08T21:22:33.123Z [LEVEL] message\n
-                let time_stamp = DateTime::from_timestamp_millis(*ts_millis)
-                    .unwrap()
-                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                let dt = DateTime::from_timestamp_millis(*ts_millis)
+                    .unwrap_or_else(|| Utc::now());
+                let time_stamp = dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                 Some(format!("{} [{}] {}\n", time_stamp, level, msg))
             }
             LogRecord::Shutdown => None,
@@ -164,7 +164,11 @@ pub async fn init_file_logger<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, J
     let task = tokio::spawn(async move {
         while let Some(rec) = rx.recv().await {
             match &rec {
-                LogRecord::Message { level, msg, ts_millis } => {
+                LogRecord::Message {
+                    level,
+                    msg,
+                    ts_millis,
+                } => {
                     if let Some(line) = rec.format_line() {
                         {
                             let mut unique_writer = writer.lock().await;
@@ -226,7 +230,7 @@ mod tests {
     use super::{LogLevel, init_file_logger};
     use chrono::{SecondsFormat, Utc};
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_temp_path(name: &str) -> PathBuf {
@@ -239,9 +243,23 @@ mod tests {
         p
     }
 
+    // RAII guard to ensure the temporary log file is removed on drop,
+    // even if a test fails or panics before reaching explicit cleanup.
+    struct TempFileGuard(PathBuf);
+    impl TempFileGuard {
+        fn new<P: AsRef<Path>>(path: P) -> Self { Self(path.as_ref().to_path_buf()) }
+        fn path(&self) -> &Path { &self.0 }
+    }
+    impl Drop for TempFileGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
     #[tokio::test]
     async fn test_file_logger_writes_lines() {
         let path = unique_temp_path("test_file_logger_writes_lines");
+        let _guard = TempFileGuard::new(&path);
         let (logger, task) = init_file_logger(&path).await.expect("init logger");
 
         logger.info("hello info");
@@ -313,6 +331,7 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_levels_format() {
         let path = unique_temp_path("test_multiple_levels_format");
+        let _guard = TempFileGuard::new(&path);
         let (logger, task) = init_file_logger(&path).await.expect("init logger");
 
         logger.trace("trace msg");

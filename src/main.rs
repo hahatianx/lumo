@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::config::{EnvVar, Opts, get_or_create_config};
-use crate::core::tasks::{init_jobs, JOB_TABLE};
+use crate::core::tasks::{JOB_TABLE, init_jobs};
 use crate::core::{PEER_TABLE, init_topology};
 use crate::err::Result;
 use crate::fs::init_fs;
@@ -63,8 +63,9 @@ async fn init(config: &Config) -> Result<()> {
         .set(env_var)
         .expect("Environment variable already set");
     LOGGER_CELL.set(logger).expect("Logger already set");
-
     // LOGGER enabled starting from this point
+
+    LOGGER.info(format!("Start monitoring server disc folder: {}", ENV_VAR.get().unwrap().get_working_dir().await));
 
     // Starts core initialization
     let task_queue = match init_task_queue().await {
@@ -90,7 +91,7 @@ async fn init(config: &Config) -> Result<()> {
             panic!("Failed to initialize network");
         }
     };
-    
+
     let _ = init_jobs(&task_queue).await;
 
     let global_var = GlobalVar {
@@ -127,9 +128,9 @@ async fn system_shutdown() {
 
 async fn run_server() {
     loop {
-        println!("PEER_TABLE: {:?}", PEER_TABLE);
-
-        println!("JOB LIST: {:?}", JOB_TABLE);
+        // println!("PEER_TABLE: {:?}", PEER_TABLE);
+        //
+        // println!("JOB LIST: {:?}", JOB_TABLE);
 
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }

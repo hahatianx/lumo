@@ -1,19 +1,61 @@
+use std::fmt::{Debug, Display, Formatter};
 use crate::err::Result;
 use crate::global_var::ENV_VAR;
 use crate::network::protocol::HandleableProtocol;
 use crate::network::protocol::protocol::Protocol;
 use crate::network::protocol::token::Token;
+use bitflags::bitflags;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+bitflags! {
+    #[derive(Default)]
+    pub struct HelloMode: u8 {
+        const REQUEST_REPLY = 1 << 0;
+        const LEADER = 1 << 1;
+    }
+}
+
+impl Display for HelloMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s: Vec<String> = vec![];
+        if self.contains(HelloMode::REQUEST_REPLY) {
+            s.push(" REQUEST_REPLY ".to_string());
+        }
+        if self.contains(HelloMode::LEADER) {
+            s.push(" LEADER ".to_string());
+        }
+        write!(f, "[{}]", s.join("|"))
+    }
+}
+
+impl HelloMode {
+    pub fn is_request_reply(self) -> bool {
+        self.contains(HelloMode::REQUEST_REPLY)
+    }
+    pub fn is_leader(self) -> bool {
+        self.contains(HelloMode::LEADER)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct HelloMessage {
     pub from_ip: String,
     pub from_port: u16,
     pub from_name: String,
     pub mac_addr: String,
-    // mode == 0: heartbeat, not request a hello reply
-    // mode == 1: request a hello reply,
-    // mode == 2: request a neighbor data update
-    pub mode: u8,
+    // Bitflags in `mode`:
+    // 0b01: request reply
+    // 0b10: I am leader
+    pub mode: HelloMode,
+}
+
+impl Debug for HelloMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "HelloMessage {{ from_ip: {}, from_port: {}, from_name: {}, mac_addr: {}, mode: {} }}",
+            self.from_ip, self.from_port, self.from_name, self.mac_addr, self.mode
+        )
+    }
 }
 
 impl HelloMessage {
@@ -22,7 +64,7 @@ impl HelloMessage {
         from_port: u16,
         from_name: String,
         mac_addr: String,
-        mode: u8,
+        mode: HelloMode,
     ) -> Self {
         Self {
             from_ip,
@@ -33,7 +75,7 @@ impl HelloMessage {
         }
     }
 
-    pub fn from_env(mode: u8) -> Result<Self> {
+    pub fn from_env(mode: HelloMode) -> Result<Self> {
         if let Some(ev) = ENV_VAR.get() {
             let from_ip = ev.get_ip_addr();
             let from_port = ev.get_port();
@@ -60,7 +102,7 @@ impl Protocol for HelloMessage {
             Token::Integer(self.from_port as u64),
             Token::Simple(self.from_name.clone()),
             Token::Simple(self.mac_addr.clone()),
-            Token::Integer(self.mode as u64),
+            Token::Integer(self.mode.bits() as u64),
         ];
         // Concatenate token wire-format bytes
         let mut out = Vec::new();
@@ -182,7 +224,16 @@ impl Protocol for HelloMessage {
                     )
                     .into());
                 }
-                v as u8
+                match HelloMode::from_bits(v as u8) {
+                    Some(m) => m,
+                    None => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("invalid mode bits: {}", v),
+                        )
+                        .into());
+                    }
+                }
             }
             Some(other) => {
                 return Err(io::Error::new(
@@ -297,7 +348,16 @@ impl Protocol for HelloMessage {
                     )
                     .into());
                 }
-                *v as u8
+                match HelloMode::from_bits(*v as u8) {
+                    Some(m) => m,
+                    None => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("invalid mode bits: {}", v),
+                        )
+                        .into());
+                    }
+                }
             }
             other => {
                 return Err(io::Error::new(
@@ -327,7 +387,7 @@ mod tests {
             8080,
             "alice".to_string(),
             "aa:bb:cc:dd:ee:ff".to_string(),
-            1,
+            HelloMode::REQUEST_REPLY,
         )
     }
 
@@ -358,7 +418,7 @@ mod tests {
             other => panic!("expected mac Simple, got {:?}", other),
         }
         match &tokens[5] {
-            Token::Integer(v) => assert_eq!(*v, 1),
+            Token::Integer(v) => assert_eq!(*v, HelloMode::REQUEST_REPLY.bits() as u64),
             other => panic!("expected mode Integer, got {:?}", other),
         }
         Ok(())

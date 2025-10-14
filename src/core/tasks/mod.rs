@@ -1,7 +1,10 @@
 mod handlers;
 pub use handlers::AsyncHandleable;
 mod job_summary;
-use crate::core::tasks::jobs::{get_first_hello_message_closure, get_job_heartbeat_closure, job_peer_table_anti_entropy, launch_oneshot_job, launch_periodic_job};
+use crate::core::tasks::jobs::{
+    get_first_hello_message_closure, get_job_heartbeat_closure, job_peer_table_anti_entropy,
+    launch_oneshot_job, launch_periodic_job,
+};
 pub use job_summary::JOB_TABLE;
 
 mod jobs;
@@ -38,7 +41,8 @@ pub async fn init_jobs(task_queue: &TaskQueue) -> Result<()> {
         get_first_hello_message_closure(task_queue).await?,
         Some(30),
         task_queue.sender(),
-    ).await?;
+    )
+    .await?;
 
     let heartbeat_job = launch_periodic_job(
         "Heartbeat",

@@ -9,8 +9,7 @@ pub static JOB_TABLE: LazyLock<JobTable> = LazyLock::new(|| JobTable::new());
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum JobStatus {
-    Pending = 0,
-    Running,
+    Running = 0,
     Completed,
     Failed,
     TimedOut,
@@ -43,7 +42,11 @@ impl Debug for JobSummary {
         write!(
             f,
             " {{ JobSummary job_name: {}, launched_time: {}, complete_time: {:?}, job_status: {:?}, msg: {:?} }}\n",
-            &self.job_name, &self.launched_time, &self.complete_time, &self.status, &self.status_msg
+            &self.job_name,
+            &self.launched_time,
+            &self.complete_time,
+            &self.status,
+            &self.status_msg
         )
     }
 }
@@ -109,7 +112,6 @@ pub struct JobTable {
 
 impl Debug for JobTable {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-
         match &self.jobs.try_read() {
             Ok(jobs) => {
                 for job in jobs.iter() {
@@ -128,7 +130,6 @@ impl Debug for JobTable {
                 write!(f, "<Locked>")
             }
         }
-
     }
 }
 

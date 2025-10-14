@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
-
 /// Explicit outcome for a one-shot job execution
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum OneshotJobResult {
@@ -172,7 +171,9 @@ mod tests {
     #[tokio::test]
     async fn execute_job_failure_no_timeout() {
         let mut job = OneshotJob::new("fail_job".to_string(), || async {
-            Err::<(), crate::err::Error>(std::io::Error::new(std::io::ErrorKind::Other, "boom").into())
+            Err::<(), crate::err::Error>(
+                std::io::Error::new(std::io::ErrorKind::Other, "boom").into(),
+            )
         });
         let res = job.execute_job().await;
         match res {
@@ -218,7 +219,9 @@ mod tests {
         let statuses: Arc<RwLock<Vec<JobStatus>>> = Arc::new(RwLock::new(Vec::new()));
         let statuses_cb = statuses.clone();
         let mut job = OneshotJob::new("bad".into(), || async {
-            Err::<(), crate::err::Error>(std::io::Error::new(std::io::ErrorKind::Other, "nope").into())
+            Err::<(), crate::err::Error>(
+                std::io::Error::new(std::io::ErrorKind::Other, "nope").into(),
+            )
         });
         job.update_callback(Box::new(move |status, _msg| {
             let statuses_cb = statuses_cb.clone();
@@ -274,7 +277,10 @@ mod tests {
         let job = JOB_TABLE.get_job(idx).await?;
         let mut guard = job.write().await;
         let res = guard
-            .end_job(JobStatus::Completed, String::from("should fail if already ended"))
+            .end_job(
+                JobStatus::Completed,
+                String::from("should fail if already ended"),
+            )
             .await;
         assert!(res.is_err(), "Job should have already ended");
 

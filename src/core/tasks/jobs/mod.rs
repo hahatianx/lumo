@@ -1,17 +1,18 @@
 mod job_peer_table_anti_entropy;
 
 use crate::err::Result;
-pub use job_heartbeat::{get_job_heartbeat_closure, get_first_hello_message_closure};
+pub use job_heartbeat::{get_first_hello_message_closure, get_job_heartbeat_closure};
 pub use job_peer_table_anti_entropy::job_peer_table_anti_entropy;
 use std::future::Future;
 use std::pin::Pin;
 mod job_heartbeat;
 mod oneshot_job;
 mod periodic_job;
+mod job_fs_watcher;
 
 use crate::core::tasks::job_summary::JobStatus;
-pub use periodic_job::launch_periodic_job;
 pub use oneshot_job::launch_oneshot_job;
+pub use periodic_job::launch_periodic_job;
 
 // A boxed closure that yields a boxed, pinned Future resolving to Result<()>.
 pub type JobClosure =

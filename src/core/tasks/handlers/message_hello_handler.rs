@@ -4,6 +4,7 @@ use crate::core::topology::Peer;
 use crate::err::Result;
 use crate::global_var::{LOGGER, get_msg_sender};
 use crate::network::protocol::messages::HelloMessage;
+use crate::network::protocol::messages::hello_message::HelloMode;
 use crate::network::protocol::protocol::Protocol;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -16,10 +17,10 @@ impl AsyncHandleable for HelloMessage {
         LOGGER.debug(format!("HelloMessage: {:?}", self));
         update_peer_table(&self).await?;
 
-        if self.mode == 1u8 {
+        if self.mode.is_request_reply() {
             LOGGER.debug("Received a hello message requiring response.");
             let sender = get_msg_sender().await?;
-            let resp = HelloMessage::from_env(0)?;
+            let resp = HelloMessage::from_env(HelloMode::empty())?;
             let sock_addr = SocketAddr::V4(SocketAddrV4::new(
                 self.from_ip.parse().unwrap(),
                 self.from_port,
@@ -34,11 +35,12 @@ impl AsyncHandleable for HelloMessage {
 
 fn generate_peer_from_hello_message(msg: &HelloMessage) -> Result<Peer> {
     let ip_addr = IpAddr::from_str(msg.from_ip.as_str())?;
+    let peer_is_leader = msg.mode.is_leader();
     Ok(Peer::new(
         msg.mac_addr.clone(),
         msg.from_name.clone(),
         ip_addr,
-        false,
+        peer_is_leader,
     ))
 }
 

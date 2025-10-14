@@ -5,9 +5,11 @@ use crate::network::protocol::protocol::Protocol;
 use crate::network::protocol::token::Token;
 use bytes::Bytes;
 
+mod consensus;
 pub mod messages;
 pub mod protocol;
 pub mod token;
+pub use consensus::CUR_LEADER;
 
 pub trait HandleableProtocol: protocol::Protocol + AsyncHandleable + Send + 'static {}
 

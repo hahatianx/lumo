@@ -156,6 +156,30 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::env;
+    use std::fs;
+    use std::path::Path;
+
+    // RAII guard to ensure the temporary directory tree is deleted on drop,
+    // even if the test fails/panics early.
+    struct TempDirGuard(std::path::PathBuf);
+    impl TempDirGuard {
+        fn new(prefix: &str) -> Self {
+            let mut p = std::env::temp_dir();
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            p.push(format!("{}_{}_{}", prefix, std::process::id(), ts));
+            fs::create_dir_all(&p).unwrap();
+            TempDirGuard(p)
+        }
+        fn path(&self) -> &std::path::Path { &self.0 }
+    }
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn check_current_dir_permissions() {
@@ -188,23 +212,15 @@ mod tests {
 
     #[test]
     fn check_permissions_writable_temp_dir_has_write() {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "perms_ok_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        ));
-        std::fs::create_dir_all(&p).unwrap();
-        let perms = check_dir_permissions(&p);
+        let tmp = TempDirGuard::new("perms_ok");
+        let p = tmp.path();
+        let perms = check_dir_permissions(p);
         assert!(
             perms.write,
             "Expected write permission in temp dir: {:?}",
             perms
         );
-        let _ = std::fs::remove_dir_all(&p);
+        // Best-effort explicit cleanup is handled by TempDirGuard::drop
     }
 
     #[test]
@@ -271,19 +287,13 @@ mod tests {
 
     #[test]
     fn test_dir_existence_false_for_existing_file() {
-        // Create a temporary file inside the system temp directory
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "junie_exist_file_{}_{}.tmp",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        ));
+        // Create a temporary directory and a file inside it
+        let tmp = TempDirGuard::new("junie_exist_file");
+        let p = tmp.path().join("file.tmp");
         std::fs::write(&p, b"x").unwrap();
         // test_dir_existence returns true only for directories, not files
         assert!(!test_dir_existence(p.to_str().unwrap()));
+        // Best-effort explicit cleanup (Drop will remove the directory tree)
         let _ = std::fs::remove_file(&p);
     }
 

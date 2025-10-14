@@ -3,8 +3,10 @@ use crate::core::tasks::jobs::JobClosure;
 use crate::core::tasks::low_level_tasks::{SendControlMessageTask, SendType};
 use crate::core::tasks::task_queue::TaskQueue;
 use crate::err::Result;
-use crate::global_var::LOGGER;
+use crate::global_var::{ENV_VAR, LOGGER};
+use crate::network::protocol::CUR_LEADER;
 use crate::network::protocol::messages::HelloMessage;
+use crate::network::protocol::messages::hello_message::HelloMode;
 use crate::network::protocol::protocol::Protocol;
 use bytes::Bytes;
 use std::future::Future;
@@ -26,11 +28,22 @@ pub async fn get_job_heartbeat_closure(task_q: &TaskQueue) -> Result<Box<JobClos
 
                 LOGGER.debug(format!("Active peers: {:?}", active_peers));
 
-                let hello_message = HelloMessage::from_env(0)?;
+                let mut hello_mode = HelloMode::empty();
+                {
+                    let cur_leader_guard = CUR_LEADER.read().await;
+                    if let Some(leader) = cur_leader_guard.as_ref() {
+                        if let Some(ev) = ENV_VAR.get() {
+                            if ev.get_mac_addr().eq(leader) {
+                                hello_mode |= HelloMode::LEADER;
+                            }
+                        }
+                    }
+                }
+
+                let hello_message = HelloMessage::from_env(hello_mode)?;
                 let bytes = Bytes::from(hello_message.serialize());
 
-                let task =
-                    SendControlMessageTask::new(SendType::Broadcast, bytes.clone());
+                let task = SendControlMessageTask::new(SendType::Broadcast, bytes.clone());
 
                 cloned_task_q_sender.send(Box::new(task)).await?;
 
@@ -42,7 +55,6 @@ pub async fn get_job_heartbeat_closure(task_q: &TaskQueue) -> Result<Box<JobClos
     Ok(Box::new(closure))
 }
 
-
 pub async fn get_first_hello_message_closure(task_q: &TaskQueue) -> Result<Box<JobClosure>> {
     let task_q_sender = task_q.sender();
 
@@ -50,8 +62,8 @@ pub async fn get_first_hello_message_closure(task_q: &TaskQueue) -> Result<Box<J
         let cloned_task_q_sender = task_q_sender.clone();
         let fut: std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> =
             Box::pin(async move {
-                // At the beginning of the job, send a broadcast HelloMessage to all nodes in the network.  The message requires response.
-                let first_hello_message = HelloMessage::from_env(1)?;
+                // At the beginning of the job, send a broadcast HelloMessage to all nodes in the network. The message requires response.
+                let first_hello_message = HelloMessage::from_env(HelloMode::REQUEST_REPLY)?;
                 let b = Bytes::from(first_hello_message.serialize());
                 cloned_task_q_sender
                     .send(Box::new(SendControlMessageTask::new(

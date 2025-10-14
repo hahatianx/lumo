@@ -1,4 +1,6 @@
 pub mod util;
+mod fs_listener;
+pub use fs_listener::FsListener;
 
 use crate::err::Result;
 use crate::fs::util::test_dir_existence;
@@ -7,6 +9,7 @@ use crate::utilities::init_file_logger;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::task::JoinHandle;
+use crate::global_var::{ENV_VAR, LOGGER_CELL};
 
 /// Initialize filesystem-related resources under the given `path`.
 ///
@@ -52,6 +55,9 @@ pub async fn init_fs<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, JoinHandle
     let log_file: PathBuf = logs_dir.join("server.log");
     let (logger, task) = init_file_logger(&log_file).await?;
 
+
+    let fs_listener = FsListener::watch(&base).expect("should start watcher");
+
     Ok((logger, task))
 }
 
@@ -62,23 +68,34 @@ mod tests {
     use std::io::Read;
     use std::time::Duration;
 
-    // Use a helper to make a unique temp directory path
-    fn unique_temp_dir(name: &str) -> std::path::PathBuf {
-        let mut p = std::env::temp_dir();
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        p.push(format!("{}_{}_{}", name, std::process::id(), ts));
-        p
+    // RAII guard to ensure the temporary directory tree is deleted on drop,
+    // even if the test fails/panics early.
+    struct TempDirGuard(std::path::PathBuf);
+    impl TempDirGuard {
+        fn new(prefix: &str) -> Self {
+            let mut p = std::env::temp_dir();
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            p.push(format!("{}_{}_{}", prefix, std::process::id(), ts));
+            fs::create_dir_all(&p).unwrap();
+            TempDirGuard(p)
+        }
+        fn path(&self) -> &std::path::Path { &self.0 }
+    }
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
     }
 
     #[tokio::test]
     async fn init_fs_creates_disc_logs_and_logfile_and_writes() {
-        let temp_dir = unique_temp_dir("init_fs_ok");
-        fs::create_dir_all(&temp_dir).unwrap();
+        let tmp = TempDirGuard::new("init_fs_ok");
+        let temp_dir = tmp.path();
 
-        let (logger, task) = init_fs(&temp_dir).await.expect("init_fs should succeed");
+        let (logger, task) = init_fs(temp_dir).await.expect("init_fs should succeed");
 
         // Emit a couple of log lines
         logger.info("hello world");
@@ -106,17 +123,14 @@ mod tests {
         assert!(content.contains("hello world"));
         assert!(content.contains("boom"));
 
-        // Cleanup best-effort
+        // Best-effort explicit cleanup (handled by Drop as well)
         let _ = fs::remove_file(logfile);
-        let _ = fs::remove_dir(logs);
-        let _ = fs::remove_dir(disc);
-        let _ = fs::remove_dir(&temp_dir);
     }
 
     #[tokio::test]
     async fn init_fs_errors_when_path_is_file() {
-        let temp_dir = unique_temp_dir("init_fs_err");
-        fs::create_dir_all(&temp_dir).unwrap();
+        let tmp = TempDirGuard::new("init_fs_err");
+        let temp_dir = tmp.path();
         let file_path = temp_dir.join("not_a_dir.txt");
         fs::write(&file_path, b"x").unwrap();
 
@@ -126,8 +140,7 @@ mod tests {
             "init_fs should error when given a non-directory path"
         );
 
-        // Cleanup
+        // Best-effort explicit cleanup (Drop will remove the directory tree)
         let _ = fs::remove_file(&file_path);
-        let _ = fs::remove_dir(&temp_dir);
     }
 }
