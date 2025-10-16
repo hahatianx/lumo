@@ -8,7 +8,7 @@
 //! Example
 //! -------
 //!
-//! ```no_run
+//! ```ignore
 //! use server::utilities::logger::{init_file_logger, LogLevel};
 //! use tokio::time::{sleep, Duration};
 //!

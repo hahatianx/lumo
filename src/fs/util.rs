@@ -18,9 +18,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::fs::OpenOptions;
-use tokio::time::sleep;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Result of probing directory permissions for the current process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +151,16 @@ pub fn test_dir_existence<P: AsRef<Path>>(dir: P) -> bool {
     dir.as_ref().exists() && dir.as_ref().is_dir()
 }
 
+#[inline]
+pub fn round_to_fat32(sys_time: SystemTime) -> SystemTime {
+    // FAT timestamps have a 2-second resolution. We floor to the nearest
+    // multiple of 2 seconds since the UNIX epoch, clamping pre-epoch to the epoch.
+    match sys_time.duration_since(UNIX_EPOCH) {
+        Ok(dur) => UNIX_EPOCH + std::time::Duration::from_secs(dur.as_secs() & !1),
+        Err(_) => UNIX_EPOCH,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,6 +168,7 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::Path;
+    use std::time::Duration;
 
     // RAII guard to ensure the temporary directory tree is deleted on drop,
     // even if the test fails/panics early.
@@ -317,5 +326,28 @@ mod tests {
             let _ = std::fs::remove_file(&p);
         }
         assert!(!test_dir_existence(p.to_str().unwrap()));
+    }
+
+    #[test]
+    fn round_to_fat32_floors_even_seconds_and_subsecs() {
+        let base = UNIX_EPOCH + Duration::from_secs(100);
+        let t = base + Duration::from_millis(500);
+        let r = round_to_fat32(t);
+        assert_eq!(r, base, "should floor to even second boundary");
+
+        let odd = UNIX_EPOCH + Duration::from_secs(101);
+        let r2 = round_to_fat32(odd);
+        assert_eq!(r2, base, "odd second should floor to previous even second");
+
+        let odd_with_ns = odd + Duration::from_nanos(999_999_999);
+        let r3 = round_to_fat32(odd_with_ns);
+        assert_eq!(r3, base, "subseconds should be dropped and odd floored");
+    }
+
+    #[test]
+    fn round_to_fat32_pre_epoch_clamps_to_epoch() {
+        let before = UNIX_EPOCH - Duration::from_secs(1);
+        let r = round_to_fat32(before);
+        assert_eq!(r, UNIX_EPOCH);
     }
 }

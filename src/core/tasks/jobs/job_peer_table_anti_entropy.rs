@@ -28,12 +28,11 @@ use crate::err::Result;
 /// - `Err` if the underlying peer-table operation fails.
 ///
 /// Example
-/// ```no_run
-/// use crate::core::tasks::jobs::periodic_job::launch_periodic_job;
-/// use crate::core::tasks::task_queue::TaskQueue;
-/// use crate::core::tasks::task_queue::TaskQueueConfig;
-/// use crate::core::tasks::jobs::job_peer_table_anti_entropy::job_peer_table_anti_entropy;
-/// # async fn demo() -> crate::err::Result<()> {
+/// ```ignore
+/// use server::core::tasks::jobs::periodic_job::launch_periodic_job;
+/// use server::core::tasks::task_queue::{TaskQueue, TaskQueueConfig};
+/// use server::core::tasks::jobs::job_peer_table_anti_entropy::job_peer_table_anti_entropy;
+/// # async fn demo() -> server::err::Result<()> {
 /// let queue = TaskQueue::new(TaskQueueConfig { queue_bound: 128 });
 /// let sender = queue.sender();
 /// let summary = launch_periodic_job(

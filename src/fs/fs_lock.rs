@@ -1,4 +1,5 @@
 use crate::err::{Error, Result};
+use fs2::FileExt;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -10,7 +11,6 @@ use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::RwLock as TokioRwLock;
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard};
 use tokio::time::sleep;
-use fs2::FileExt;
 
 /// wrapped by a file lock OS call
 /// There must be at most one FileLockGuard towards each file in the system
@@ -138,7 +138,10 @@ impl RwLock {
                 .map_err(|_| -> Error { "rwlock state poisoned".into() })?;
             if state_guard.read_count.load(Ordering::Acquire) > 0 {
                 state_guard.read_count.fetch_add(1, Ordering::AcqRel);
-                return Ok(ReadGuard { _guard: guard, state: self.inner.clone() });
+                return Ok(ReadGuard {
+                    _guard: guard,
+                    state: self.inner.clone(),
+                });
             }
         }
 
@@ -156,7 +159,10 @@ impl RwLock {
                 need_first = true;
             } else {
                 state_guard.read_count.fetch_add(1, Ordering::AcqRel);
-                return Ok(ReadGuard { _guard: guard, state: self.inner.clone() });
+                return Ok(ReadGuard {
+                    _guard: guard,
+                    state: self.inner.clone(),
+                });
             }
         }
 
@@ -175,7 +181,10 @@ impl RwLock {
             state_guard.read_count.store(1, Ordering::Release);
         }
 
-        Ok(ReadGuard { _guard: guard, state: self.inner.clone() })
+        Ok(ReadGuard {
+            _guard: guard,
+            state: self.inner.clone(),
+        })
     }
 
     /// Acquire a write lock. This is exclusive in-process and also guards cross-process
@@ -273,7 +282,10 @@ mod tests {
             let _wg = lock.write().await.expect("write lock");
         })
         .await;
-        assert!(write_attempt.is_err(), "write should time out while readers active");
+        assert!(
+            write_attempt.is_err(),
+            "write should time out while readers active"
+        );
 
         // Wait for readers to finish
         for h in handles {
@@ -310,7 +322,10 @@ mod tests {
             let _wg2 = lock_w.write().await.expect("write lock 2");
         })
         .await;
-        assert!(write_block.is_err(), "second write should block while first write held");
+        assert!(
+            write_block.is_err(),
+            "second write should block while first write held"
+        );
 
         drop(wg);
 

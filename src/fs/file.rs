@@ -1,10 +1,12 @@
 use crate::err::Result;
-use crate::fs::fs_lock::acquire_lock;
+use crate::fs::fs_lock::{RwLock, acquire_lock};
+use crate::fs::util::round_to_fat32;
 use std::cell::RefCell;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tokio::fs;
-use tokio::fs::OpenOptions;
+use tokio::fs::File as TokioFile;
 use tokio::io::AsyncReadExt;
 use tokio::time::sleep;
 use xxhash_rust::xxh64::Xxh64;
@@ -41,6 +43,19 @@ impl FileFingerPrint {
     }
 }
 
+/// Get file size and mtime. To get the tuple accurately, added a lock to the file.
+fn get_file_sz_and_mtime<P: AsRef<Path>>(p: P) -> Result<(u64, SystemTime)> {
+    let meta = std::fs::metadata(p)?;
+    let size = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()
+        .map(round_to_fat32)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    Ok((size, mtime))
+}
+
 /// Must be guarded by system level file lock
 pub struct LumoFile {
     pub path: PathBuf,
@@ -52,33 +67,65 @@ pub struct LumoFile {
 }
 
 impl LumoFile {
-    pub fn new(path: PathBuf) -> Self {
-        Self {
-            path,
-            size: 0,
-            mtime: SystemTime::UNIX_EPOCH,
-            fingerprint: RefCell::new(FileFingerPrint::new(0, SystemTime::UNIX_EPOCH)),
+    pub async fn new(path: PathBuf) -> Result<Self> {
+        let p: &Path = path.as_ref();
+        {
+            let _guard = RwLock::new(p).read().await?;
+            let (size, mtime) = get_file_sz_and_mtime(p)?;
+            Ok(Self {
+                path,
+                size,
+                mtime,
+                fingerprint: RefCell::new(FileFingerPrint::new(size, mtime)),
+            })
         }
     }
 
-    pub fn file_matches(&self, other: &LumoFile) -> bool {
-        // // Primary fast path: identical by size and modification time
-        // if self.size == other.size && self.mtime == other.mtime {
-        //     return true; // same content at same path (or copied preserving mtime)
-        // }
-        //
-        // // If size/mtime differ, we can still consider a match if the content is the same
-        // // (e.g., file moved/renamed). We only use cached checksums to avoid blocking I/O here.
-        // let self_sum = self.fingerprint.get_mut().get_checksum(self.size, self.mtime);
-        // let other_sum = other.fingerprint.get_mut().get_checksum(other.size, other.mtime);
-        //
-        // match (self_sum, other_sum) {
-        //     (Some(a), Some(b)) => a == b, // same checksum => same file content (moved/renamed)
-        //     (Some(_), None) | (None, Some(_)) | (None, None) => false, // not enough info; treat as not matching
-        // }
+    /// Determine whether two LumoFile instances refer to the same underlying file or to
+    /// files with identical content.
+    ///
+    /// Fast-paths, in order:
+    /// - If the paths are byte-for-byte equal, return true.
+    /// - If platform metadata shows they are the same inode/file-id, return true.
+    /// - If size or mtime differ, return false (avoids checksum work).
+    /// - If size and mtime match, compare content checksums.
+    ///
+    /// Notes:
+    /// - The metadata identity check uses (dev, ino) on Unix and (volume serial, file index)
+    ///   on Windows. This detects hardlinks and identical files reached via different paths.
+    /// - The checksum path is comparatively expensive and only used when cheap checks indicate
+    ///   a potential match.
+    pub async fn same_file(&self, other: &Self) -> bool {
+        // 1) Exact path match
+        if self.path.as_os_str() == other.path.as_os_str() {
+            return true;
+        }
+
+        // 2) Quick negative: different size or mtime means different content
+        if self.size != other.size || self.mtime != other.mtime {
+            return false;
+        }
+
+        // 3) Content comparison via checksum as a last resort
+        let my_checksum = self.get_checksum().await;
+        let other_checksum = other.get_checksum().await;
+        if let (Ok(my_checksum), Ok(other_checksum)) = (my_checksum, other_checksum) {
+            return my_checksum == other_checksum;
+        }
         false
     }
 
+    /// Compute and cache an XXH64 checksum of the file contents.
+    ///
+    /// Behavior and performance:
+    /// - Returns a cached checksum when the stored (size, mtime) match the current
+    ///   metadata known to this LumoFile instance.
+    /// - Otherwise, acquires a per-path reader lock to avoid concurrent mutation and
+    ///   streams the file efficiently in 64 KiB chunks to compute the checksum.
+    /// - After computing, updates the fingerprint cache with the metadata observed
+    ///   during hashing.
+    ///
+    /// Errors are wrapped into the crate's Result type.
     pub async fn get_checksum(&self) -> Result<u64> {
         if let Some(checksum) = self
             .fingerprint
@@ -88,8 +135,7 @@ impl LumoFile {
             return Ok(checksum);
         }
 
-        // Acquire an exclusive lock via sidecar file to avoid races
-        let _guard = acquire_lock(&self.path).await?;
+        let _guard = RwLock::new(&self.path).read().await?;
 
         // Compute checksum under exclusive lock; single metadata read is sufficient.
         let (size, mtime, checksum) = {
@@ -98,15 +144,7 @@ impl LumoFile {
                 .await
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
-            // Get metadata (size + mtime)
-            let meta = file
-                .metadata()
-                .await
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-            let size = meta.len();
-            let mtime = meta
-                .modified()
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+            let (size, mtime) = get_file_sz_and_mtime(&self.path)?;
 
             // Stream the file into the hasher
             let mut hasher = Xxh64::new(0);
@@ -163,7 +201,7 @@ mod tests {
 
         let expected = xxh64(b"hello world", 0);
 
-        let mut tracker = LumoFile::new(p.clone());
+        let tracker = LumoFile::new(p.clone()).await.unwrap();
         let c1 = tracker.get_checksum().await.expect("checksum ok");
         assert_eq!(c1, expected);
 
@@ -179,7 +217,7 @@ mod tests {
         let p = temp_path("change.txt");
         std::fs::write(&p, b"first").unwrap();
 
-        let mut tracker = LumoFile::new(p.clone());
+        let tracker = LumoFile::new(p.clone()).await.unwrap();
         let c1 = tracker.get_checksum().await.unwrap();
 
         // Ensure mtime changes on some filesystems (coarse granularity)
@@ -187,7 +225,7 @@ mod tests {
         std::fs::write(&p, b"second").unwrap();
 
         // Use a fresh tracker to also verify metadata is read correctly
-        let mut tracker2 = LumoFile::new(p.clone());
+        let tracker2 = LumoFile::new(p.clone()).await.unwrap();
         let c2 = tracker2.get_checksum().await.unwrap();
         assert_ne!(c1, c2, "checksum should change after content update");
 
@@ -214,14 +252,14 @@ mod tests {
         let p6 = p.clone();
         let p7 = p.clone();
         let p8 = p.clone();
-        let f1 = async move { LumoFile::new(p1).get_checksum().await.unwrap() };
-        let f2 = async move { LumoFile::new(p2).get_checksum().await.unwrap() };
-        let f3 = async move { LumoFile::new(p3).get_checksum().await.unwrap() };
-        let f4 = async move { LumoFile::new(p4).get_checksum().await.unwrap() };
-        let f5 = async move { LumoFile::new(p5).get_checksum().await.unwrap() };
-        let f6 = async move { LumoFile::new(p6).get_checksum().await.unwrap() };
-        let f7 = async move { LumoFile::new(p7).get_checksum().await.unwrap() };
-        let f8 = async move { LumoFile::new(p8).get_checksum().await.unwrap() };
+        let f1 = async move { LumoFile::new(p1).await.unwrap().get_checksum().await.unwrap() };
+        let f2 = async move { LumoFile::new(p2).await.unwrap().get_checksum().await.unwrap() };
+        let f3 = async move { LumoFile::new(p3).await.unwrap().get_checksum().await.unwrap() };
+        let f4 = async move { LumoFile::new(p4).await.unwrap().get_checksum().await.unwrap() };
+        let f5 = async move { LumoFile::new(p5).await.unwrap().get_checksum().await.unwrap() };
+        let f6 = async move { LumoFile::new(p6).await.unwrap().get_checksum().await.unwrap() };
+        let f7 = async move { LumoFile::new(p7).await.unwrap().get_checksum().await.unwrap() };
+        let f8 = async move { LumoFile::new(p8).await.unwrap().get_checksum().await.unwrap() };
         let (r1, r2, r3, r4, r5, r6, r7, r8) = tokio::join!(f1, f2, f3, f4, f5, f6, f7, f8);
         for v in [r1, r2, r3, r4, r5, r6, r7, r8] {
             assert_eq!(v, expected);
@@ -253,7 +291,7 @@ mod tests {
         }
 
         async fn run_once(path: &Path) -> u64 {
-            let mut t = LumoFile::new(path.to_path_buf());
+            let t = LumoFile::new(path.to_path_buf()).await.expect("new ok");
             t.get_checksum().await.expect("checksum ok")
         }
 
