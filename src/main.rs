@@ -65,7 +65,10 @@ async fn init(config: &Config) -> Result<()> {
     LOGGER_CELL.set(logger).expect("Logger already set");
     // LOGGER enabled starting from this point
 
-    LOGGER.info(format!("Start monitoring server disc folder: {}", ENV_VAR.get().unwrap().get_working_dir().await));
+    LOGGER.info(format!(
+        "Start monitoring server disc folder: {}",
+        ENV_VAR.get().unwrap().get_working_dir().await
+    ));
 
     // Starts core initialization
     let task_queue = match init_task_queue().await {
@@ -92,7 +95,7 @@ async fn init(config: &Config) -> Result<()> {
         }
     };
 
-    let _ = init_jobs(&task_queue).await;
+    let taskq_sender = task_queue.sender();
 
     let global_var = GlobalVar {
         logger_handle: Mutex::new(Some(logger_handle)),
@@ -103,6 +106,8 @@ async fn init(config: &Config) -> Result<()> {
     GLOBAL_VAR
         .set(global_var)
         .expect("Global variable already set");
+
+    let _ = init_jobs(&taskq_sender).await;
 
     Ok(())
 }

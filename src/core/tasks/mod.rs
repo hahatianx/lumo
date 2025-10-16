@@ -11,7 +11,7 @@ mod jobs;
 mod low_level_tasks;
 pub mod task_queue;
 
-use crate::core::tasks::task_queue::TaskQueue;
+use crate::core::tasks::task_queue::{TaskQueue, TaskQueueSender};
 use crate::err::Result;
 
 pub async fn init_task_queue() -> Result<TaskQueue> {
@@ -25,31 +25,31 @@ pub async fn shutdown_core(task_queue: TaskQueue) -> Result<()> {
     Ok(())
 }
 
-pub async fn init_jobs(task_queue: &TaskQueue) -> Result<()> {
+pub async fn init_jobs(sender: &TaskQueueSender) -> Result<()> {
     let peer_table_anti_entropy_job = launch_periodic_job(
         "Peer table anti-entropy",
         "Scans and invalidates expired peers in a periodic fashion",
         job_peer_table_anti_entropy,
         60,
-        task_queue.sender(),
+        sender.clone(),
     )
     .await?;
 
     let first_hello_message_job = launch_oneshot_job(
         "Server merged into network",
         "Send out the first HelloMessage and receive response",
-        get_first_hello_message_closure(task_queue).await?,
+        get_first_hello_message_closure(sender).await?,
         Some(30),
-        task_queue.sender(),
+        sender.clone(),
     )
     .await?;
 
     let heartbeat_job = launch_periodic_job(
         "Heartbeat",
         "Periodically sends HelloMessage to inactive itself in neighbors' peer tables",
-        get_job_heartbeat_closure(task_queue).await?,
+        get_job_heartbeat_closure(sender).await?,
         30,
-        task_queue.sender(),
+        sender.clone(),
     )
     .await?;
 

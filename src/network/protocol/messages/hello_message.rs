@@ -1,10 +1,10 @@
-use std::fmt::{Debug, Display, Formatter};
 use crate::err::Result;
 use crate::global_var::ENV_VAR;
 use crate::network::protocol::HandleableProtocol;
 use crate::network::protocol::protocol::Protocol;
 use crate::network::protocol::token::Token;
 use bitflags::bitflags;
+use std::fmt::{Debug, Display, Formatter};
 
 bitflags! {
     #[derive(Default)]

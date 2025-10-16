@@ -18,7 +18,9 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::fs::OpenOptions;
+use tokio::time::sleep;
 
 /// Result of probing directory permissions for the current process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,7 +175,9 @@ mod tests {
             fs::create_dir_all(&p).unwrap();
             TempDirGuard(p)
         }
-        fn path(&self) -> &std::path::Path { &self.0 }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
     }
     impl Drop for TempDirGuard {
         fn drop(&mut self) {

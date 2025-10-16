@@ -1,7 +1,7 @@
 use crate::core::PEER_TABLE;
 use crate::core::tasks::jobs::JobClosure;
 use crate::core::tasks::low_level_tasks::{SendControlMessageTask, SendType};
-use crate::core::tasks::task_queue::TaskQueue;
+use crate::core::tasks::task_queue::{TaskQueue, TaskQueueSender};
 use crate::err::Result;
 use crate::global_var::{ENV_VAR, LOGGER};
 use crate::network::protocol::CUR_LEADER;
@@ -11,8 +11,8 @@ use crate::network::protocol::protocol::Protocol;
 use bytes::Bytes;
 use std::future::Future;
 
-pub async fn get_job_heartbeat_closure(task_q: &TaskQueue) -> Result<Box<JobClosure>> {
-    let task_q_sender = task_q.sender();
+pub async fn get_job_heartbeat_closure(task_q: &TaskQueueSender) -> Result<Box<JobClosure>> {
+    let task_q_sender = task_q.clone();
     // Return a closure compatible with launch_periodic_job: FnMut() -> Future<Output = Result<()>>
     let closure = move || {
         let cloned_task_q_sender = task_q_sender.clone();
@@ -55,8 +55,8 @@ pub async fn get_job_heartbeat_closure(task_q: &TaskQueue) -> Result<Box<JobClos
     Ok(Box::new(closure))
 }
 
-pub async fn get_first_hello_message_closure(task_q: &TaskQueue) -> Result<Box<JobClosure>> {
-    let task_q_sender = task_q.sender();
+pub async fn get_first_hello_message_closure(task_q: &TaskQueueSender) -> Result<Box<JobClosure>> {
+    let task_q_sender = task_q.clone();
 
     let closure = move || {
         let cloned_task_q_sender = task_q_sender.clone();
@@ -104,9 +104,10 @@ mod tests {
 
         // Create a task queue; there are no peers so no sends will be enqueued.
         let q = TaskQueue::new(TaskQueueConfig { queue_bound: 8 });
+        let q_sender = q.sender();
 
         // Build the heartbeat job closure and run it once.
-        let mut closure = get_job_heartbeat_closure(&q).await?;
+        let mut closure = get_job_heartbeat_closure(&q_sender).await?;
         (closure)().await?;
 
         // Shutdown the queue to clean up background task.

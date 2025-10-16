@@ -136,8 +136,7 @@ impl LogRecord {
                 ts_millis,
             } => {
                 // Format: 2025-10-08T21:22:33.123Z [LEVEL] message\n
-                let dt = DateTime::from_timestamp_millis(*ts_millis)
-                    .unwrap_or_else(|| Utc::now());
+                let dt = DateTime::from_timestamp_millis(*ts_millis).unwrap_or_else(|| Utc::now());
                 let time_stamp = dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                 Some(format!("{} [{}] {}\n", time_stamp, level, msg))
             }
@@ -247,8 +246,12 @@ mod tests {
     // even if a test fails or panics before reaching explicit cleanup.
     struct TempFileGuard(PathBuf);
     impl TempFileGuard {
-        fn new<P: AsRef<Path>>(path: P) -> Self { Self(path.as_ref().to_path_buf()) }
-        fn path(&self) -> &Path { &self.0 }
+        fn new<P: AsRef<Path>>(path: P) -> Self {
+            Self(path.as_ref().to_path_buf())
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
     }
     impl Drop for TempFileGuard {
         fn drop(&mut self) {

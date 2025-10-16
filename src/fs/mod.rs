@@ -1,15 +1,19 @@
-pub mod util;
+pub mod file;
 mod fs_listener;
+pub mod util;
+pub use file::LumoFile;
+mod fs_lock;
+
 pub use fs_listener::FsListener;
 
 use crate::err::Result;
 use crate::fs::util::test_dir_existence;
+use crate::global_var::{ENV_VAR, LOGGER_CELL};
 use crate::utilities::AsyncLogger;
 use crate::utilities::init_file_logger;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::task::JoinHandle;
-use crate::global_var::{ENV_VAR, LOGGER_CELL};
 
 /// Initialize filesystem-related resources under the given `path`.
 ///
@@ -55,8 +59,14 @@ pub async fn init_fs<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, JoinHandle
     let log_file: PathBuf = logs_dir.join("server.log");
     let (logger, task) = init_file_logger(&log_file).await?;
 
+    // Start filesystem watcher and spawn a background processor for events
+    let (listener, mut rx) = FsListener::watch(&base).expect("should start watcher");
 
-    let fs_listener = FsListener::watch(&base).expect("should start watcher");
+    // Keep the watcher alive for the lifetime of the process
+    let _leaked_watcher: &'static mut FsListener = Box::leak(Box::new(listener));
+
+    // Spawn a task to process all notify events according to the required algorithm
+    let _processor = FsListener::spawn_default_processor(rx);
 
     Ok((logger, task))
 }
@@ -82,7 +92,9 @@ mod tests {
             fs::create_dir_all(&p).unwrap();
             TempDirGuard(p)
         }
-        fn path(&self) -> &std::path::Path { &self.0 }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
     }
     impl Drop for TempDirGuard {
         fn drop(&mut self) {

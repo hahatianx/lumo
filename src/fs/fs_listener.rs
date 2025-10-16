@@ -1,8 +1,9 @@
+use crate::global_var::LOGGER;
+use notify::event::{EventKind, ModifyKind};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver};
-use crate::global_var::LOGGER;
 
 /// A simple filesystem listener built on top of `notify`.
 ///
@@ -31,11 +32,16 @@ impl FsListener {
         let tx_cloned = tx.clone();
         let mut watcher = RecommendedWatcher::new(
             move |res: Result<Event, notify::Error>| {
+                LOGGER.debug(format!("Filesystem event: {:?}", &res));
                 if let Ok(ev) = res {
-                    // Best-effort send it; ignore if receiver dropped
-                    println!("{:?}", ev);
-                    // LOGGER.info(format!("Filesystem event: {:?}", &ev));
-                    let _ = tx_cloned.blocking_send(ev);
+                    if let Some(ev) = filter_event(ev) {
+                        // Best-effort send it; ignore if receiver dropped
+                        println!("{:?}", ev);
+                        let _ = tx_cloned.blocking_send(ev);
+                    } else {
+                        // Filtered out; nothing to do
+                        return;
+                    }
                 } else {
                     // on errors
                     println!("{:?}", &res);
@@ -57,9 +63,86 @@ impl FsListener {
             let _ = watcher.unwatch(&metadata_folder);
         }
 
-        println!("Start watching {}", root.display());
+        println!("Start watching {:?}", &watcher);
 
-        Ok((Self { _watcher: watcher, _root: root }, rx))
+        Ok((
+            Self {
+                _watcher: watcher,
+                _root: root,
+            },
+            rx,
+        ))
+    }
+
+    /// Spawn a background task that processes all notify events according to the
+    /// algorithm: if path exists => move into scope; otherwise => move out of scope.
+    /// Returns a JoinHandle for the spawned task.
+    pub fn spawn_default_processor(mut rx: Receiver<Event>) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            while let Some(ev) = rx.recv().await {
+                for p in ev.paths {
+                    let exists = p.exists();
+                    if exists {
+                        // Treat as move into watch scope
+                        println!("[fs] move into scope: {}", p.display());
+                    } else {
+                        // Treat as move out of watch scope
+                        println!("[fs] move out of scope: {}", p.display());
+                    }
+                }
+            }
+        })
+    }
+}
+
+fn is_ignored_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    // Common OS metadata files
+    if lower == ".ds_store" || lower == "desktop.ini" || lower == "thumbs.db" {
+        return true;
+    }
+    // Ignore permission testing files
+    if name.starts_with(".perm_check") {
+        return true;
+    }
+    false
+}
+
+fn filter_event(mut ev: Event) -> Option<Event> {
+    // Filter by event kind: only Create, Remove, or Modify(Name)
+    let is_wanted_kind = match &ev.kind {
+        EventKind::Create(_) => true,
+        EventKind::Remove(_) => true,
+        EventKind::Modify(ModifyKind::Name(_)) => true,
+        _ => false,
+    };
+    if !is_wanted_kind {
+        return None;
+    }
+
+    // Filter paths: ignore OS junk and permission probe files; require full perms on target dir
+    ev.paths.retain(|p| {
+        // ignore names like .DS_Store, desktop.ini, and any starting with .perm_check
+        if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+            if is_ignored_name(name) {
+                return false;
+            }
+        }
+        // Check full permissions on the directory (for files: check parent)
+        let dir_to_check: &Path = if p.is_dir() {
+            p
+        } else {
+            p.parent().unwrap_or(p)
+        };
+        let perms = crate::fs::util::check_dir_permissions(dir_to_check);
+        perms.read && perms.write && perms.execute
+    });
+
+    if ev.paths.is_empty() {
+        // Nothing relevant remains to forward
+        None
+    } else {
+        Some(ev)
     }
 }
 
@@ -82,7 +165,9 @@ mod tests {
             fs::create_dir_all(&p).unwrap();
             TempDirGuard(p)
         }
-        fn path(&self) -> &Path { &self.0 }
+        fn path(&self) -> &Path {
+            &self.0
+        }
     }
     impl Drop for TempDirGuard {
         fn drop(&mut self) {
@@ -107,7 +192,10 @@ mod tests {
             .await
             .unwrap_or(false);
 
-        assert!(got_any, "expected at least one filesystem event after creating a file");
+        assert!(
+            got_any,
+            "expected at least one filesystem event after creating a file"
+        );
 
         // Best-effort explicit cleanup (not necessary due to Drop, but harmless)
         let _ = fs::remove_file(&file_path);
@@ -119,7 +207,10 @@ mod tests {
         let missing = tmp.path().join("subdir_that_does_not_exist");
         // don't create it
         let res = FsListener::watch(&missing);
-        assert!(res.is_err(), "expected error when watching a non-existent path");
+        assert!(
+            res.is_err(),
+            "expected error when watching a non-existent path"
+        );
     }
 
     #[tokio::test]
@@ -155,7 +246,10 @@ mod tests {
         .await
         .unwrap_or(false);
 
-        assert!(!saw_disc_event, "should not receive events for files under .disc since it is unwatched");
+        assert!(
+            !saw_disc_event,
+            "should not receive events for files under .disc since it is unwatched"
+        );
 
         let _ = std::fs::remove_file(&disc_file);
     }
