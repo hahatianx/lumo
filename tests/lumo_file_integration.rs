@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
+use fs2::FileExt;
 use server::fs::LumoFile;
 use tokio::time::sleep;
-use fs2::FileExt;
 
 // RAII guard to ensure the temporary directory tree is deleted on drop,
 // even if the test fails/panics early.
@@ -142,7 +142,10 @@ async fn checksum_matches_state_at_size_and_mtime() {
     // Ensure mtime difference beyond coarse rounding (sleep a bit)
     sleep(Duration::from_millis(2100)).await;
     // Touch the file to update mtime
-    let _ = std::fs::OpenOptions::new().write(true).append(true).open(&path);
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .append(true)
+        .open(&path);
     // Append 1 byte so size changes too
     {
         use tokio::io::AsyncWriteExt;
@@ -167,6 +170,13 @@ async fn checksum_matches_state_at_size_and_mtime() {
     assert_eq!(s2, expected_s2, "checksum should follow modified content B");
 
     // And the earlier snapshot remains associated with its original (size, mtime)
-    assert_eq!(size_a as usize, content_a.len(), "size in snapshot matches A");
-    assert!(mtime_a <= lf_b.mtime, "mtime should have advanced after modification");
+    assert_eq!(
+        size_a as usize,
+        content_a.len(),
+        "size in snapshot matches A"
+    );
+    assert!(
+        mtime_a <= lf_b.mtime,
+        "mtime should have advanced after modification"
+    );
 }

@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 build = "build.rs"
 
+[lib]
+test = true
+
 [dependencies]
 serde = {  version = "1.0.228", features = ["derive"] }
 tokio = {  version = "1.47.1" , features = ["full"] }

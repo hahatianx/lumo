@@ -1,22 +1,29 @@
 use crate::err::Result;
-use crate::fs::fs_lock::{RwLock, acquire_lock};
+use crate::fs::fs_lock::RwLock;
 use crate::fs::util::round_to_fat32;
-use std::cell::RefCell;
-use std::fs::File;
+use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tokio::fs;
-use tokio::fs::File as TokioFile;
 use tokio::io::AsyncReadExt;
-use tokio::time::sleep;
+use tokio::sync::RwLock as AsyncRwLock;
 use xxhash_rust::xxh64::Xxh64;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 /// Must be guarded by system level file lock
 struct FileFingerPrint {
     size: u64,
     mtime: SystemTime,
     checksum: Option<u64>,
+}
+
+impl Debug for FileFingerPrint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileFingerPrint")
+            .field("size", &self.size)
+            .field("mtime", &self.mtime)
+            .finish()
+    }
 }
 
 impl FileFingerPrint {
@@ -63,7 +70,18 @@ pub struct LumoFile {
     pub size: u64,
     pub mtime: SystemTime,
 
-    fingerprint: RefCell<FileFingerPrint>,
+    fingerprint: AsyncRwLock<FileFingerPrint>,
+}
+
+impl Debug for LumoFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LumoFile")
+            .field("path", &self.path)
+            .field("size", &self.size)
+            .field("mtime", &self.mtime)
+            .field("fingerprint", &self.fingerprint)
+            .finish()
+    }
 }
 
 impl LumoFile {
@@ -76,7 +94,7 @@ impl LumoFile {
                 path,
                 size,
                 mtime,
-                fingerprint: RefCell::new(FileFingerPrint::new(size, mtime)),
+                fingerprint: AsyncRwLock::new(FileFingerPrint::new(size, mtime)),
             })
         }
     }
@@ -86,13 +104,10 @@ impl LumoFile {
     ///
     /// Fast-paths, in order:
     /// - If the paths are byte-for-byte equal, return true.
-    /// - If platform metadata shows they are the same inode/file-id, return true.
     /// - If size or mtime differ, return false (avoids checksum work).
     /// - If size and mtime match, compare content checksums.
     ///
     /// Notes:
-    /// - The metadata identity check uses (dev, ino) on Unix and (volume serial, file index)
-    ///   on Windows. This detects hardlinks and identical files reached via different paths.
     /// - The checksum path is comparatively expensive and only used when cheap checks indicate
     ///   a potential match.
     pub async fn same_file(&self, other: &Self) -> bool {
@@ -129,7 +144,8 @@ impl LumoFile {
     pub async fn get_checksum(&self) -> Result<u64> {
         if let Some(checksum) = self
             .fingerprint
-            .borrow()
+            .read()
+            .await
             .get_checksum(self.size, self.mtime)
         {
             return Ok(checksum);
@@ -165,7 +181,8 @@ impl LumoFile {
 
         // Update cached fingerprint to reflect the observed metadata when checksum was computed.
         self.fingerprint
-            .borrow_mut()
+            .write()
+            .await
             .set_checksum(size, mtime, checksum);
 
         Ok(checksum)
@@ -252,14 +269,70 @@ mod tests {
         let p6 = p.clone();
         let p7 = p.clone();
         let p8 = p.clone();
-        let f1 = async move { LumoFile::new(p1).await.unwrap().get_checksum().await.unwrap() };
-        let f2 = async move { LumoFile::new(p2).await.unwrap().get_checksum().await.unwrap() };
-        let f3 = async move { LumoFile::new(p3).await.unwrap().get_checksum().await.unwrap() };
-        let f4 = async move { LumoFile::new(p4).await.unwrap().get_checksum().await.unwrap() };
-        let f5 = async move { LumoFile::new(p5).await.unwrap().get_checksum().await.unwrap() };
-        let f6 = async move { LumoFile::new(p6).await.unwrap().get_checksum().await.unwrap() };
-        let f7 = async move { LumoFile::new(p7).await.unwrap().get_checksum().await.unwrap() };
-        let f8 = async move { LumoFile::new(p8).await.unwrap().get_checksum().await.unwrap() };
+        let f1 = async move {
+            LumoFile::new(p1)
+                .await
+                .unwrap()
+                .get_checksum()
+                .await
+                .unwrap()
+        };
+        let f2 = async move {
+            LumoFile::new(p2)
+                .await
+                .unwrap()
+                .get_checksum()
+                .await
+                .unwrap()
+        };
+        let f3 = async move {
+            LumoFile::new(p3)
+                .await
+                .unwrap()
+                .get_checksum()
+                .await
+                .unwrap()
+        };
+        let f4 = async move {
+            LumoFile::new(p4)
+                .await
+                .unwrap()
+                .get_checksum()
+                .await
+                .unwrap()
+        };
+        let f5 = async move {
+            LumoFile::new(p5)
+                .await
+                .unwrap()
+                .get_checksum()
+                .await
+                .unwrap()
+        };
+        let f6 = async move {
+            LumoFile::new(p6)
+                .await
+                .unwrap()
+                .get_checksum()
+                .await
+                .unwrap()
+        };
+        let f7 = async move {
+            LumoFile::new(p7)
+                .await
+                .unwrap()
+                .get_checksum()
+                .await
+                .unwrap()
+        };
+        let f8 = async move {
+            LumoFile::new(p8)
+                .await
+                .unwrap()
+                .get_checksum()
+                .await
+                .unwrap()
+        };
         let (r1, r2, r3, r4, r5, r6, r7, r8) = tokio::join!(f1, f2, f3, f4, f5, f6, f7, f8);
         for v in [r1, r2, r3, r4, r5, r6, r7, r8] {
             assert_eq!(v, expected);

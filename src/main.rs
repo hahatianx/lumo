@@ -1,14 +1,11 @@
 use crate::config::Config;
 use crate::config::{EnvVar, Opts, get_or_create_config};
-use crate::core::tasks::{JOB_TABLE, init_jobs};
-use crate::core::{PEER_TABLE, init_topology};
+use crate::core::init_topology;
+use crate::core::tasks::init_jobs;
 use crate::err::Result;
-use crate::fs::init_fs;
+use crate::fs::{FS_INDEX, init_working_dir, init_fs};
 use crate::global_var::{ENV_VAR, GLOBAL_VAR, GlobalVar, LOGGER, LOGGER_CELL};
-use crate::network::protocol::messages::HelloMessage;
-use crate::network::protocol::protocol::Protocol;
 use crate::network::{init_network, terminate_network};
-use bytes::Bytes;
 use core::tasks::{init_task_queue, shutdown_core};
 use tokio::sync::Mutex;
 use tokio::{select, signal};
@@ -55,7 +52,7 @@ async fn init(config: &Config) -> Result<()> {
 
     let env_var = EnvVar::from_config(config).expect("Failed to set environment variables");
 
-    let (logger, logger_handle) = init_fs(env_var.get_working_dir().await)
+    let (logger, logger_handle) = init_working_dir(env_var.get_working_dir().await)
         .await
         .expect("Failed to initialize logger");
 
@@ -65,10 +62,7 @@ async fn init(config: &Config) -> Result<()> {
     LOGGER_CELL.set(logger).expect("Logger already set");
     // LOGGER enabled starting from this point
 
-    LOGGER.info(format!(
-        "Start monitoring server disc folder: {}",
-        ENV_VAR.get().unwrap().get_working_dir().await
-    ));
+    init_fs(ENV_VAR.get().unwrap().get_working_dir().await)?;
 
     // Starts core initialization
     let task_queue = match init_task_queue().await {
@@ -137,7 +131,9 @@ async fn run_server() {
         //
         // println!("JOB LIST: {:?}", JOB_TABLE);
 
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        LOGGER.info(FS_INDEX.debug().await);
+
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
     }
 }
 

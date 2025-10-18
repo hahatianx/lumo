@@ -1,8 +1,11 @@
-use crate::global_var::LOGGER;
+use crate::fs::fs_index::FS_INDEX;
+use crate::global_var::{ENV_VAR, LOGGER};
 use notify::event::{EventKind, ModifyKind};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
+use std::thread;
 use std::time::Duration;
+use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{self, Receiver};
 
 /// A simple filesystem listener built on top of `notify`.
@@ -32,11 +35,10 @@ impl FsListener {
         let tx_cloned = tx.clone();
         let mut watcher = RecommendedWatcher::new(
             move |res: Result<Event, notify::Error>| {
-                LOGGER.debug(format!("Filesystem event: {:?}", &res));
+                // LOGGER.debug(format!("Captured filesystem event: {:?}", &res));
                 if let Ok(ev) = res {
                     if let Some(ev) = filter_event(ev) {
                         // Best-effort send it; ignore if receiver dropped
-                        println!("{:?}", ev);
                         let _ = tx_cloned.blocking_send(ev);
                     } else {
                         // Filtered out; nothing to do
@@ -44,8 +46,7 @@ impl FsListener {
                     }
                 } else {
                     // on errors
-                    println!("{:?}", &res);
-                    // LOGGER.error(format!("Filesystem watcher error: {}", res.unwrap_err()));
+                    LOGGER.error(format!("Filesystem watcher error: {}", res.unwrap_err()));
                 }
             },
             Config::default()
@@ -56,14 +57,7 @@ impl FsListener {
         // Begin watching
         watcher.watch(&root, RecursiveMode::Recursive)?;
 
-        let metadata_folder = root.join(".disc");
-        if metadata_folder.exists() {
-            // Best-effort: if .disc exists and was included by recursive watch, attempt to exclude it.
-            // Ignore errors in case it wasn't explicitly watched.
-            let _ = watcher.unwatch(&metadata_folder);
-        }
-
-        println!("Start watching {:?}", &watcher);
+        LOGGER.info(format!("Start monitoring server disc folder: {}", &root.display()));
 
         Ok((
             Self {
@@ -77,20 +71,29 @@ impl FsListener {
     /// Spawn a background task that processes all notify events according to the
     /// algorithm: if path exists => move into scope; otherwise => move out of scope.
     /// Returns a JoinHandle for the spawned task.
-    pub fn spawn_default_processor(mut rx: Receiver<Event>) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            while let Some(ev) = rx.recv().await {
-                for p in ev.paths {
-                    let exists = p.exists();
-                    if exists {
-                        // Treat as move into watch scope
-                        println!("[fs] move into scope: {}", p.display());
-                    } else {
-                        // Treat as move out of watch scope
-                        println!("[fs] move out of scope: {}", p.display());
+    pub fn spawn_default_processor(mut rx: Receiver<Event>) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let rt = Runtime::new().unwrap();
+            rt.block_on(async {
+                while let Some(ev) = rx.recv().await {
+                    LOGGER.debug(format!("Received filesystem event: {:?}", &ev));
+                    for p in ev.paths {
+                        let path: &Path = p.as_ref();
+                        match FS_INDEX.on_file_event(path, ev.kind).await {
+                            Ok(_) => {
+                                LOGGER.trace(format!(
+                                    "[fs] processed event {:?} of path {}",
+                                    ev.kind,
+                                    p.display()
+                                ));
+                            }
+                            Err(e) => {
+                                LOGGER.warn(format!("[fs] error processing event: {}", e));
+                            }
+                        }
                     }
                 }
-            }
+            });
         })
     }
 }
@@ -103,6 +106,15 @@ fn is_ignored_name(name: &str) -> bool {
     }
     // Ignore permission testing files
     if name.starts_with(".perm_check") {
+        return true;
+    }
+    // TODO: This is not a good idea.  Only filter out those starts with ${root}/.disc/
+    if name.contains(".disc") {
+        return true;
+    }
+    // Ignore .sb- files, which are created by the SuperBlock when it is created.
+    // TODO: add a exclude list
+    if name.contains(".sb-") {
         return true;
     }
     false

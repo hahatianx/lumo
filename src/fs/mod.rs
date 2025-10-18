@@ -2,13 +2,15 @@ pub mod file;
 mod fs_listener;
 pub mod util;
 pub use file::LumoFile;
+mod fs_index;
+pub use fs_index::FS_INDEX;
 mod fs_lock;
 
 pub use fs_listener::FsListener;
 
 use crate::err::Result;
+use crate::fs::fs_index::init_fs_index;
 use crate::fs::util::test_dir_existence;
-use crate::global_var::{ENV_VAR, LOGGER_CELL};
 use crate::utilities::AsyncLogger;
 use crate::utilities::init_file_logger;
 use std::fs;
@@ -24,7 +26,7 @@ use tokio::task::JoinHandle;
 /// 4. Initialize the async file logger with a log file in the logs directory.
 ///
 /// Returns the async logger handle and the background task handle.
-pub async fn init_fs<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, JoinHandle<()>)> {
+pub async fn init_working_dir<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, JoinHandle<()>)> {
     let base: &Path = path.as_ref();
 
     // 1. Check permissions on the provided path.
@@ -59,8 +61,12 @@ pub async fn init_fs<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, JoinHandle
     let log_file: PathBuf = logs_dir.join("server.log");
     let (logger, task) = init_file_logger(&log_file).await?;
 
+    Ok((logger, task))
+}
+
+pub fn init_fs<P: AsRef<Path>>(base: P) -> Result<()> {
     // Start filesystem watcher and spawn a background processor for events
-    let (listener, mut rx) = FsListener::watch(&base).expect("should start watcher");
+    let (listener, rx) = FsListener::watch(&base).expect("should start watcher");
 
     // Keep the watcher alive for the lifetime of the process
     let _leaked_watcher: &'static mut FsListener = Box::leak(Box::new(listener));
@@ -68,7 +74,9 @@ pub async fn init_fs<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, JoinHandle
     // Spawn a task to process all notify events according to the required algorithm
     let _processor = FsListener::spawn_default_processor(rx);
 
-    Ok((logger, task))
+    init_fs_index()?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -107,7 +115,9 @@ mod tests {
         let tmp = TempDirGuard::new("init_fs_ok");
         let temp_dir = tmp.path();
 
-        let (logger, task) = init_fs(temp_dir).await.expect("init_fs should succeed");
+        let (logger, task) = init_working_dir(temp_dir)
+            .await
+            .expect("init_fs should succeed");
 
         // Emit a couple of log lines
         logger.info("hello world");
@@ -146,7 +156,7 @@ mod tests {
         let file_path = temp_dir.join("not_a_dir.txt");
         fs::write(&file_path, b"x").unwrap();
 
-        let res = init_fs(&file_path).await;
+        let res = init_working_dir(&file_path).await;
         assert!(
             res.is_err(),
             "init_fs should error when given a non-directory path"

@@ -55,11 +55,11 @@ pub enum LogLevel {
 impl fmt::Display for LogLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            LogLevel::Trace => "TRACE",
-            LogLevel::Debug => "DEBUG",
+            LogLevel::Trace => "\x1b[36mTRACE\x1b[0m",
+            LogLevel::Debug => "\x1b[34mDEBUG\x1b[0m",
             LogLevel::Info => "INFO ",
-            LogLevel::Warn => "WARN ",
-            LogLevel::Error => "ERROR",
+            LogLevel::Warn => "\x1b[33mWARN \x1b[0m",
+            LogLevel::Error => "\x1b[31mERROR\x1b[0m",
         };
         write!(f, "{}", s)
     }

@@ -1,4 +1,5 @@
 use crate::err::{Error, Result};
+use crate::global_var::LOGGER;
 use fs2::FileExt;
 use std::collections::HashMap;
 use std::fs::File;
@@ -38,6 +39,10 @@ pub(crate) async fn acquire_lock(path: &Path) -> Result<FileLockGuard> {
     let mut backoff_ms: u64 = 10;
     let max_backoff_ms: u64 = 500;
     let max_attempts: u32 = 100; // ~ up to a few seconds total
+
+    if !path.exists() {
+        return Err(format!("File lock path does not exist: {}", path.display()).into());
+    }
 
     let mut last_err: Option<Error> = None;
 
