@@ -281,12 +281,12 @@ mod tests {
             content
         );
         assert!(
-            content.contains("[WARN ] be careful"),
+            content.contains("[\x1b[33mWARN \x1b[0m] be careful"),
             "content=\n{}",
             content
         );
         assert!(
-            content.contains("[ERROR] something went wrong"),
+            content.contains("[\x1b[31mERROR\x1b[0m] something went wrong"),
             "content=\n{}",
             content
         );
@@ -301,11 +301,11 @@ mod tests {
 
     #[test]
     fn test_log_level_display_strings() {
-        assert_eq!(format!("{}", LogLevel::Trace), "TRACE");
-        assert_eq!(format!("{}", LogLevel::Debug), "DEBUG");
+        assert_eq!(format!("{}", LogLevel::Trace), "\x1b[36mTRACE\x1b[0m");
+        assert_eq!(format!("{}", LogLevel::Debug), "\x1b[34mDEBUG\x1b[0m");
         assert_eq!(format!("{}", LogLevel::Info), "INFO ");
-        assert_eq!(format!("{}", LogLevel::Warn), "WARN ");
-        assert_eq!(format!("{}", LogLevel::Error), "ERROR");
+        assert_eq!(format!("{}", LogLevel::Warn), "\x1b[33mWARN \x1b[0m");
+        assert_eq!(format!("{}", LogLevel::Error), "\x1b[31mERROR\x1b[0m");
     }
 
     #[test]
@@ -318,7 +318,7 @@ mod tests {
         };
         let line = rec.format_line().expect("line should exist for Message");
         println!("{}", &line);
-        assert!(line.contains("[DEBUG]"));
+        assert!(line.contains("[\x1b[34mDEBUG\x1b[0m]"));
         assert!(line.contains("xyz"));
         assert!(line.contains("1970-01-01"));
         assert!(line.contains('T'));
@@ -349,10 +349,10 @@ mod tests {
 
         // Each level marker should appear at least once
         for (marker, msg) in [
-            ("[TRACE]", "trace msg"),
+            ("[\x1b[36mTRACE\x1b[0m]", "trace msg"),
             ("[INFO ]", "info msg"),
-            ("[WARN ]", "warn msg"),
-            ("[ERROR]", "error msg"),
+            ("[\x1b[33mWARN \x1b[0m]", "warn msg"),
+            ("[\x1b[31mERROR\x1b[0m]", "error msg"),
         ] {
             assert!(
                 content.contains(marker),
