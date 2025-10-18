@@ -90,7 +90,9 @@ impl AsyncLogger {
     }
 
     pub fn trace<S: Into<String>>(&self, msg: S) {
-        self.log(LogLevel::Trace, msg);
+        if *DEBUG_MODE {
+            self.log(LogLevel::Trace, msg);
+        }
     }
     pub fn debug<S: Into<String>>(&self, msg: S) {
         if *DEBUG_MODE {

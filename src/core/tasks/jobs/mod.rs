@@ -5,7 +5,7 @@ pub use job_heartbeat::{get_first_hello_message_closure, get_job_heartbeat_closu
 pub use job_peer_table_anti_entropy::job_peer_table_anti_entropy;
 use std::future::Future;
 use std::pin::Pin;
-mod job_fs_watcher;
+mod job_fs_anti_entropy;
 mod job_heartbeat;
 mod oneshot_job;
 mod periodic_job;

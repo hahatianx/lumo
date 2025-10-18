@@ -8,9 +8,10 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock as AsyncRwLock;
+use crate::fs::fs_lock::RwLock;
 
 /// A single file entry tracked by the in-memory index.
 ///
@@ -392,14 +393,14 @@ impl FileIndex {
 /// Take notify events CREATE | REMOVE | MODIFY_NAME | MODIFY_CONTENT events
 ///
 /// Ideally
-/// CREATE: add the new file into index
-/// REMOVE: mark the file index not active
-/// MODIFY_NAME: check file path existence:
-///   if not exist: it's a move from, mark file index inactive
-///   if exist:  it's a move destination,
-///         try to find the source file index, if found, move the source index to new path
-///         otherwise create a new file index
-/// MODIFY_CONTENT: mark the file index stale
+/// > CREATE: add the new file into index
+/// > REMOVE: mark the file index not active
+/// > MODIFY_NAME: check file path existence:
+/// > if not exist: it's a move from, mark file index inactive
+/// > if exists: it's a move destination,
+/// > try to find the source file index, if found, move the source index to new path
+/// > otherwise create a new file index
+/// > MODIFY_CONTENT: mark the file index stale
 ///
 /// Backend job to periodically rescan stale indices
 /// Backend job to periodically clean up inactive indices --> a grace period
@@ -460,6 +461,124 @@ impl FileIndex {
             }
         }
     }
+}
+
+impl FileIndex {
+
+    pub async fn index_stale_rescan(&self) -> Result<()> {
+        // Snapshot active entries to avoid holding the index lock while doing I/O
+        let entries: Vec<(PathBuf, std::sync::Arc<AsyncRwLock<FileEntry>>)> = {
+            let guard = self.inner.read().await;
+            guard
+                .active_paths
+                .iter()
+                .filter_map(|pb| {
+                    let p = pb.as_path();
+                    guard.map.get(p).cloned().map(|arc| (pb.clone(), arc))
+                })
+                .collect()
+        };
+
+        for (path, arc) in entries {
+            // Read current flags cheaply
+            let (is_active, is_stale ) = {
+                let e = arc.read().await;
+                (e.is_active, e.is_stale)
+            };
+
+            if !is_active {
+                continue;
+            }
+
+            // If marked stale, refresh metadata and clear the stale flag
+            if is_stale {
+                match LumoFile::new(path.clone()).await {
+                    Ok(lf) => {
+                        let mut entry = FileEntry::new(lf);
+                        // Ensure flags
+                        entry.set_active(true);
+                        entry.set_stale(false);
+                        // Upsert will refresh indices/meta atomically
+                        self.upsert(entry).await;
+                        LOGGER.trace(format!("index_anti_entropy: refreshed '{}'", path.display()))
+                    }
+                    Err(e) => {
+                        // This is not expected to happen, but if it does, we should log it
+                        LOGGER.error(format!(
+                            "index_anti_entropy: failed to refresh '{}': {}",
+                            path.display(), e
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn index_inactive_clean(&self) -> Result<()> {
+        // Goal: remove entries that have been inactive for more than 10 minutes.
+        // Concurrency rules to avoid deadlocks:
+        // - Do NOT hold the index write lock while awaiting on per-entry locks.
+        // - Snapshot candidate Arcs under a read lock, then inspect entries outside the index lock.
+        // - Before removal, re-check inactivity using only index data (active_paths) to avoid
+        //   mixing lock orders with per-entry locks.
+        let now = SystemTime::now();
+        let max_inactive = std::time::Duration::from_secs(10 * 60);
+
+        // Snapshot inactive entries: collect (PathBuf, Arc<Entry>) for paths not in active_paths.
+        let inactive_entries: Vec<(PathBuf, std::sync::Arc<AsyncRwLock<FileEntry>>)> = {
+            let guard = self.inner.read().await;
+            guard
+                .map
+                .iter()
+                .filter_map(|(p, arc)| {
+                    if guard.active_paths.contains(p) {
+                        None
+                    } else {
+                        Some((p.clone(), arc.clone()))
+                    }
+                })
+                .collect()
+        };
+
+        // Determine which ones are expired based on last_modified timestamp stored in the entry.
+        let mut expired: Vec<PathBuf> = Vec::new();
+        for (path, arc) in inactive_entries {
+            // Read the entry without holding the index lock.
+            let e = arc.read().await;
+            if !e.is_active {
+                if let Ok(elapsed) = now.duration_since(e.last_modified) {
+                    if elapsed >= max_inactive {
+                        expired.push(path);
+                    }
+                }
+            }
+        }
+
+        // Remove expired entries atomically under a write lock to avoid races with concurrent updates.
+        for path in expired {
+            // Acquire a write lock for re-validation and removal as a single atomic block.
+            let mut guard = self.inner.write().await;
+            // Re-validate under the write lock: entry exists and is still inactive.
+            let still_inactive = guard.map.contains_key(&path) && !guard.active_paths.contains(&path);
+            if still_inactive {
+                // Remove indices and caches inline to avoid re-entrant locking.
+                if let Some((size, mtime)) = guard.meta.remove(&path) {
+                    guard.remove_indices(&path, size, mtime);
+                }
+                // Remove the entry from the map and active cache.
+                let _ = guard.map.remove(&path);
+                guard.active_paths.remove(&path);
+                LOGGER.trace(format!(
+                    "index_inactive_clean: removed inactive entry '{}" ,
+                    path.display()
+                ));
+            }
+            // write lock dropped here at end of scope iteration
+        }
+        Ok(())
+    }
+
 }
 
 pub static FS_INDEX: LazyLock<FileIndex> = LazyLock::new(|| FileIndex::new());
