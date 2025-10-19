@@ -1,7 +1,7 @@
 use crate::core::PEER_TABLE;
 use crate::core::tasks::jobs::JobClosure;
 use crate::core::tasks::low_level_tasks::{SendControlMessageTask, SendType};
-use crate::core::tasks::task_queue::{TaskQueue, TaskQueueSender};
+use crate::core::tasks::task_queue::TaskQueueSender;
 use crate::err::Result;
 use crate::global_var::{ENV_VAR, LOGGER};
 use crate::network::protocol::CUR_LEADER;
@@ -83,7 +83,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::config::EnvVar;
-    use crate::core::tasks::task_queue::TaskQueueConfig;
+    use crate::core::tasks::task_queue::{TaskQueue, TaskQueueConfig};
     use crate::global_var::ENV_VAR;
 
     // When there are no active peers, the heartbeat closure should still build and run without errors.

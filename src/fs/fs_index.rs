@@ -36,6 +36,8 @@ impl Debug for FileEntry {
             .field("last_writer", &self.last_writer)
             .field("is_active", &self.is_active)
             .field("is_stale", &self.is_stale)
+            .field("version", &self.version)
+            .field("last_modified", &self.last_modified)
             .finish()
     }
 }
@@ -348,8 +350,9 @@ impl FileIndex {
                 // Remove old indices if existed
                 let size = entry.file.size;
                 let mtime = entry.file.mtime;
-                let version = entry.version;
-                let arc_entry = std::sync::Arc::new(AsyncRwLock::new(entry));
+                let version = from_ver + 1;
+                let arc_entry = Arc::new(AsyncRwLock::new(entry));
+                arc_entry.write().await.version = version;
                 let key = p.clone();
                 if let Some((old_size, old_mtime)) = guard.meta.remove(&key) {
                     guard.remove_indices(&key, old_size, old_mtime);
@@ -651,9 +654,11 @@ impl FileIndex {
             .with_stale(false);
         match v_opt {
             Some(v) => {
+                LOGGER.trace(format!("on_add: refreshing '{}'", path.display()));
                 self.refresh_on_checked(path, v, entry).await?;
             }
             None => {
+                LOGGER.trace(format!("on_add: upsert '{}'", path.display()));
                 self.upsert(entry).await;
             }
         }
@@ -1150,7 +1155,6 @@ mod more_fs_index_set_active_tests {
     }
 }
 
-
 #[cfg(test)]
 mod more_fs_index_concurrency_tests {
     use super::*;
@@ -1214,8 +1218,13 @@ mod more_fs_index_concurrency_tests {
             let h = tokio::spawn(async move {
                 // Alternate writer names and flip active state
                 for round in 0..50u32 {
-                    idx.set_last_writer(&p, format!("worker-{}-{}", i, round)).await;
-                    if round % 2 == 0 { let _ = idx.activate(&p).await; } else { let _ = idx.deactivate(&p).await; }
+                    idx.set_last_writer(&p, format!("worker-{}-{}", i, round))
+                        .await;
+                    if round % 2 == 0 {
+                        let _ = idx.activate(&p).await;
+                    } else {
+                        let _ = idx.deactivate(&p).await;
+                    }
                 }
             });
             handles.push(h);
@@ -1227,11 +1236,17 @@ mod more_fs_index_concurrency_tests {
             }
         })
         .await;
-        assert!(joined.is_ok(), "concurrent operations timed out (possible deadlock)");
+        assert!(
+            joined.is_ok(),
+            "concurrent operations timed out (possible deadlock)"
+        );
 
         // Basic sanity: entries still present and have last_writer set
         for p in paths {
-            let exists = index.with_entry(&p, |e| e.last_writer.is_some()).await.unwrap_or(false);
+            let exists = index
+                .with_entry(&p, |e| e.last_writer.is_some())
+                .await
+                .unwrap_or(false);
             assert!(exists);
         }
     }
@@ -1259,12 +1274,19 @@ mod more_fs_index_concurrency_tests {
         // Modify content -> stale
         {
             use tokio::io::AsyncWriteExt;
-            let mut f = tokio::fs::OpenOptions::new().append(true).open(&p).await.unwrap();
+            let mut f = tokio::fs::OpenOptions::new()
+                .append(true)
+                .open(&p)
+                .await
+                .unwrap();
             f.write_all(&[1, 2, 3, 4]).await.unwrap();
             f.flush().await.unwrap();
         }
         index
-            .on_file_event(&p, EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)))
+            .on_file_event(
+                &p,
+                EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)),
+            )
             .await
             .unwrap();
         let stale = index.with_entry(&p, |e| e.is_stale).await.unwrap();
@@ -1295,7 +1317,9 @@ mod more_fs_index_concurrency_tests {
         write_bytes3(&p, 32, 0xEF).await;
 
         let index = FileIndex::new();
-        index.upsert(FileEntry::new(LumoFile::new(p.clone()).await.unwrap())).await;
+        index
+            .upsert(FileEntry::new(LumoFile::new(p.clone()).await.unwrap()))
+            .await;
 
         // Deactivate to mark as inactive
         index.deactivate(&p).await.unwrap();
@@ -1313,6 +1337,9 @@ mod more_fs_index_concurrency_tests {
 
         index.index_inactive_clean().await.unwrap();
         let missing = index.with_entry(&p, |_| ()).await.is_none();
-        assert!(missing, "inactive_clean should remove long-inactive entries");
+        assert!(
+            missing,
+            "inactive_clean should remove long-inactive entries"
+        );
     }
 }

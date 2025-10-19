@@ -1,6 +1,6 @@
 use crate::core::tasks::AsyncHandleable;
 use crate::err::Result;
-use crate::global_var::{GLOBAL_VAR, GlobalVar, LOGGER, get_msg_sender};
+use crate::global_var::get_msg_sender;
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::net::SocketAddr;

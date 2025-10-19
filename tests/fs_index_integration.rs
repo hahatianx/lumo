@@ -1,8 +1,8 @@
-use std::fs;
-use std::time::Duration;
 use notify::EventKind;
 use notify::event::{CreateKind, DataChange, ModifyKind, RemoveKind};
 use server::config::{Config, EnvVar};
+use std::fs;
+use std::time::Duration;
 
 // Simple temp dir guard for integration tests
 struct TempDirGuard(std::path::PathBuf);
@@ -17,7 +17,9 @@ impl TempDirGuard {
         fs::create_dir_all(&p).unwrap();
         TempDirGuard(p)
     }
-    fn path(&self) -> &std::path::Path { &self.0 }
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
 }
 impl Drop for TempDirGuard {
     fn drop(&mut self) {
@@ -70,8 +72,12 @@ async fn fs_index_integration_on_file_event_flow() {
     // Modify content to mark stale
     {
         use tokio::io::AsyncWriteExt;
-        let mut f = tokio::fs::OpenOptions::new().append(true).open(&p).await.unwrap();
-        f.write_all(&[9,9,9,9]).await.unwrap();
+        let mut f = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&p)
+            .await
+            .unwrap();
+        f.write_all(&[9, 9, 9, 9]).await.unwrap();
         f.flush().await.unwrap();
     }
     FS_INDEX
@@ -133,7 +139,9 @@ async fn fs_index_integration_concurrent_events_no_deadlock() {
     }
     // Wait with timeout to detect deadlocks
     tokio::time::timeout(Duration::from_secs(5), async {
-        for h in handles { h.await.unwrap(); }
+        for h in handles {
+            h.await.unwrap();
+        }
     })
     .await
     .expect("create events timed out (deadlock)");
@@ -150,7 +158,9 @@ async fn fs_index_integration_concurrent_events_no_deadlock() {
         handles2.push(h);
     }
     tokio::time::timeout(Duration::from_secs(5), async {
-        for h in handles2 { h.await.unwrap(); }
+        for h in handles2 {
+            h.await.unwrap();
+        }
     })
     .await
     .expect("modify events timed out (deadlock)");
@@ -158,6 +168,8 @@ async fn fs_index_integration_concurrent_events_no_deadlock() {
     // Best-effort cleanup: remove files from disk and tell index
     for p in paths {
         let _ = std::fs::remove_file(&p);
-        let _ = FS_INDEX.on_file_event(&p, EventKind::Remove(RemoveKind::File)).await;
+        let _ = FS_INDEX
+            .on_file_event(&p, EventKind::Remove(RemoveKind::File))
+            .await;
     }
 }

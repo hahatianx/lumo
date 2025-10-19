@@ -3,7 +3,7 @@ use crate::fs::fs_lock::RwLock;
 use crate::fs::util::round_to_fat32;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock as AsyncRwLock;
@@ -192,6 +192,7 @@ impl LumoFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tokio::task;
     use xxhash_rust::xxh64::xxh64;
 

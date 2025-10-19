@@ -1,5 +1,4 @@
 use crate::err::{Error, Result};
-use crate::global_var::LOGGER;
 use fs2::FileExt;
 use std::collections::HashMap;
 use std::fs::File;
