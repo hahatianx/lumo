@@ -1,6 +1,7 @@
 mod job_peer_table_anti_entropy;
 
 use crate::err::Result;
+pub use job_fs_anti_entropy::{job_fs_inactive_cleanup, job_fs_stale_rescan};
 pub use job_heartbeat::{get_first_hello_message_closure, get_job_heartbeat_closure};
 pub use job_peer_table_anti_entropy::job_peer_table_anti_entropy;
 use std::future::Future;

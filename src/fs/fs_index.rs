@@ -4,13 +4,14 @@ use crate::global_var::ENV_VAR;
 use crate::global_var::LOGGER;
 use notify::EventKind;
 use notify::event::ModifyKind;
+use rand::random;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex, RwLock as AsyncRwLock};
+use tokio::sync::RwLock as AsyncRwLock;
 
 /// A single file entry tracked by the in-memory index.
 ///
@@ -48,7 +49,7 @@ impl FileEntry {
             is_active: true,
             is_stale: false,
             last_modified: SystemTime::now(),
-            version: 0,
+            version: random::<u64>() % 1000,
         }
     }
 
@@ -215,12 +216,6 @@ impl FileIndex {
         }
     }
 
-    /// Check whether an entry exists for the given path.
-    pub async fn contains<P: AsRef<Path>>(&self, path: P) -> bool {
-        let guard = self.inner.read().await;
-        guard.map.contains_key(path.as_ref())
-    }
-
     /// The number of entries currently indexed.
     pub async fn len(&self) -> usize {
         let guard = self.inner.read().await;
@@ -317,6 +312,61 @@ impl FileIndex {
         guard.active_version.insert(key, version);
     }
 
+    async fn refresh_on_checked<P: AsRef<Path>>(
+        &self,
+        path: P,
+        from_ver: u64,
+        entry: FileEntry,
+    ) -> Result<()> {
+        let p = path.as_ref().to_path_buf();
+
+        let arc_opt = {
+            let guard = self.inner.read().await;
+            guard.map.get(&p).cloned()
+        };
+        let Some(arc) = arc_opt else {
+            LOGGER.warn(format!("refresh_on: path not found in index: {}", p.display()).as_str());
+            return Err(format!("path not found in index: {}", p.display()).into());
+        };
+
+        {
+            let e = arc.read().await;
+            if e.version != from_ver {
+                e.return_ver_error("refresh_on", from_ver)?;
+            }
+        }
+
+        let mut guard = self.inner.write().await;
+        if let Some(curr_arc) = guard.map.get(&p) {
+            let ver_ok = guard
+                .active_version
+                .get(&p)
+                .map(|v| *v == from_ver)
+                .unwrap_or(false);
+            if Arc::ptr_eq(&arc, curr_arc) && ver_ok {
+                // remove from indices/meta caches first (need old size/mtime)
+                // Remove old indices if existed
+                let size = entry.file.size;
+                let mtime = entry.file.mtime;
+                let version = entry.version;
+                let arc_entry = std::sync::Arc::new(AsyncRwLock::new(entry));
+                let key = p.clone();
+                if let Some((old_size, old_mtime)) = guard.meta.remove(&key) {
+                    guard.remove_indices(&key, old_size, old_mtime);
+                }
+                // Insert/replace entry and indices
+                guard.map.insert(key.clone(), arc_entry);
+                guard.meta.insert(key.clone(), (size, mtime));
+                guard.insert_indices(&key, size, mtime);
+                // Update active cache
+                guard.active_paths.insert(key.clone());
+                guard.active_version.insert(key, version);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Remove an entry by path with expected version. Returns true if an entry was removed.
     /// Remember to update active_versions
     async fn remove_checked<P: AsRef<Path>>(&self, path: P, from_ver: u64) -> Result<bool> {
@@ -402,7 +452,10 @@ impl FileIndex {
             }
         }
 
-        let msg = format!("[fs_index] mark stale: entry of {} was changed before commit", p.display());
+        let msg = format!(
+            "[fs_index] mark stale: entry of {} was changed before commit",
+            p.display()
+        );
         LOGGER.warn(&msg);
         Err(msg.into())
     }
@@ -431,7 +484,10 @@ impl FileIndex {
                 return Ok(());
             }
         }
-        let msg = format!("[fs_index] activate: entry of {} was changed before commit", p.display());
+        let msg = format!(
+            "[fs_index] activate: entry of {} was changed before commit",
+            p.display()
+        );
         LOGGER.warn(&msg);
         Err(msg.into())
     }
@@ -460,12 +516,20 @@ impl FileIndex {
                 return Ok(());
             }
         }
-        let msg = format!("[fs_index] deactivate: entry of {} was changed before commit", p.display());
+        let msg = format!(
+            "[fs_index] deactivate: entry of {} was changed before commit",
+            p.display()
+        );
         LOGGER.warn(&msg);
         Err(msg.into())
     }
 
-    async fn set_last_writer_checked<P: AsRef<Path>>(&self, path: P, from_ver: u64, writer: String) -> Result<()> {
+    async fn set_last_writer_checked<P: AsRef<Path>>(
+        &self,
+        path: P,
+        from_ver: u64,
+        writer: String,
+    ) -> Result<()> {
         let p = path.as_ref().to_path_buf();
         // Step 1: get Arc under read lock
         let arc = {
@@ -488,7 +552,10 @@ impl FileIndex {
                 return Ok(());
             }
         }
-        let msg = format!("[fs_index] set_last_writer: entry of {} was changed before commit", p.display());
+        let msg = format!(
+            "[fs_index] set_last_writer: entry of {} was changed before commit",
+            p.display()
+        );
         LOGGER.warn(&msg);
         Err(msg.into())
     }
@@ -496,7 +563,7 @@ impl FileIndex {
 
 // Public wrappers delegating to version-checked internals expected by tests
 impl FileIndex {
-    pub async fn remove<P: AsRef<Path>>(&self, p: P) -> bool {
+    async fn remove<P: AsRef<Path>>(&self, p: P) -> bool {
         let path: &Path = p.as_ref();
         let v_opt = { self.inner.read().await.active_version.get(path).copied() };
         match v_opt {
@@ -505,7 +572,7 @@ impl FileIndex {
         }
     }
 
-    pub async fn activate<P: AsRef<Path>>(&self, p: P) -> Result<()> {
+    async fn activate<P: AsRef<Path>>(&self, p: P) -> Result<()> {
         let path: &Path = p.as_ref();
         let v_opt = { self.inner.read().await.active_version.get(path).copied() };
         match v_opt {
@@ -514,7 +581,7 @@ impl FileIndex {
         }
     }
 
-    pub async fn deactivate<P: AsRef<Path>>(&self, p: P) -> Result<()> {
+    async fn deactivate<P: AsRef<Path>>(&self, p: P) -> Result<()> {
         let path: &Path = p.as_ref();
         let v_opt = { self.inner.read().await.active_version.get(path).copied() };
         match v_opt {
@@ -523,7 +590,7 @@ impl FileIndex {
         }
     }
 
-    pub async fn mark_stale<P: AsRef<Path>>(&self, p: P) -> Result<()> {
+    async fn mark_stale<P: AsRef<Path>>(&self, p: P) -> Result<()> {
         let path: &Path = p.as_ref();
         let v_opt = { self.inner.read().await.active_version.get(path).copied() };
         match v_opt {
@@ -532,7 +599,7 @@ impl FileIndex {
         }
     }
 
-    pub async fn set_last_writer<P: AsRef<Path>>(&self, p: P, writer: impl Into<String>) {
+    async fn set_last_writer<P: AsRef<Path>>(&self, p: P, writer: impl Into<String>) {
         let path: &Path = p.as_ref();
         let writer: String = writer.into();
         let v_opt = { self.inner.read().await.active_version.get(path).copied() };
@@ -542,7 +609,11 @@ impl FileIndex {
             }
             None => {
                 LOGGER.warn(
-                    format!("set_last_writer: path not found in index: {}", path.display()).as_str(),
+                    format!(
+                        "set_last_writer: path not found in index: {}",
+                        path.display()
+                    )
+                    .as_str(),
                 );
             }
         }
@@ -572,13 +643,20 @@ impl FileIndex {
 ///
 impl FileIndex {
     async fn on_add<P: AsRef<Path>>(&self, p: P, lf: LumoFile) -> Result<()> {
-        self.upsert(
-            FileEntry::new(lf)
-                .with_last_writer(ENV_VAR.get().unwrap().get_machine_name())
-                .with_active(true)
-                .with_stale(false),
-        )
-        .await;
+        let path: &Path = p.as_ref();
+        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        let entry = FileEntry::new(lf)
+            .with_last_writer(ENV_VAR.get().unwrap().get_machine_name())
+            .with_active(true)
+            .with_stale(false);
+        match v_opt {
+            Some(v) => {
+                self.refresh_on_checked(path, v, entry).await?;
+            }
+            None => {
+                self.upsert(entry).await;
+            }
+        }
         Ok(())
     }
 
@@ -607,7 +685,10 @@ impl FileIndex {
                 Ok(())
             }
             None => {
-                let msg = format!("on_modify_content: path not found in index: {}", path.display());
+                let msg = format!(
+                    "on_modify_content: path not found in index: {}",
+                    path.display()
+                );
                 LOGGER.warn(&msg);
                 Err(msg.into())
             }
@@ -670,9 +751,9 @@ impl FileIndex {
 
         for (path, arc) in entries {
             // Read current flags cheaply
-            let is_stale = {
+            let (is_stale, cur_ver) = {
                 let e = arc.read().await;
-                e.is_stale
+                (e.is_stale, e.version)
             };
 
             // If marked stale, refresh metadata and clear the stale flag
@@ -685,7 +766,7 @@ impl FileIndex {
                             .with_stale(false)
                             .with_active(true);
                         // Upsert will refresh indices/meta atomically
-                        self.upsert(entry).await;
+                        self.refresh_on_checked(&path, cur_ver, entry).await?;
                         LOGGER.trace(format!(
                             "index_anti_entropy: refreshed '{}'",
                             path.display()
@@ -758,6 +839,7 @@ impl FileIndex {
                 // Remove the entry from the map and active cache.
                 let _ = guard.map.remove(&path);
                 guard.active_paths.remove(&path);
+                guard.active_version.remove(&path);
                 LOGGER.trace(format!(
                     "index_inactive_clean: removed inactive entry '{}'",
                     path.display()
@@ -834,9 +916,12 @@ mod tests {
         index.upsert(FileEntry::new(lf1)).await;
         index.upsert(FileEntry::new(lf2)).await;
 
-        assert!(index.contains(&p1).await);
-        assert!(index.contains(&p2).await);
-        assert_eq!(index.len().await, 2);
+        {
+            let _guard = index.inner.read().await;
+            assert!(_guard.map.contains_key(&p1));
+            assert!(_guard.map.contains_key(&p2));
+            assert_eq!(index.len().await, 2);
+        }
 
         let mut paths = index.list_paths().await;
         paths.sort();
@@ -1062,5 +1147,172 @@ mod more_fs_index_set_active_tests {
             .unwrap();
         assert!(!a2);
         assert!(ts2 >= ts1);
+    }
+}
+
+
+#[cfg(test)]
+mod more_fs_index_concurrency_tests {
+    use super::*;
+    use std::fs;
+    use std::time::Duration;
+
+    struct TempDirGuard3(std::path::PathBuf);
+    impl TempDirGuard3 {
+        fn new(prefix: &str) -> Self {
+            let mut p = std::env::temp_dir();
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            p.push(format!("{}_{}_{}", prefix, std::process::id(), ts));
+            fs::create_dir_all(&p).unwrap();
+            TempDirGuard3(p)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDirGuard3 {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn write_bytes3<P: AsRef<std::path::Path>>(p: P, size: usize, byte: u8) {
+        use tokio::io::AsyncWriteExt;
+        let mut f = tokio::fs::File::create(p.as_ref()).await.unwrap();
+        let chunk = vec![byte; 8 * 1024];
+        let mut remaining = size;
+        while remaining > 0 {
+            let to_write = remaining.min(chunk.len());
+            f.write_all(&chunk[..to_write]).await.unwrap();
+            remaining -= to_write;
+        }
+        f.flush().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_upsert_and_set_last_writer_no_deadlock() {
+        let tmp = TempDirGuard3::new("fs_index_concurrent_upsert_set_writer");
+        let index = std::sync::Arc::new(FileIndex::new());
+
+        // Prepare files and upsert
+        let mut paths = Vec::new();
+        for i in 0..8 {
+            let p = tmp.path().join(format!("f{}.bin", i));
+            write_bytes3(&p, 128 * (i + 1) as usize, 0x7A + i as u8).await;
+            let lf = LumoFile::new(p.clone()).await.unwrap();
+            index.upsert(FileEntry::new(lf)).await;
+            paths.push(p);
+        }
+
+        // Spawn many concurrent writers flipping metadata; wrap with timeout to detect deadlocks.
+        let mut handles = Vec::new();
+        for (i, p) in paths.iter().cloned().enumerate() {
+            let idx = index.clone();
+            let h = tokio::spawn(async move {
+                // Alternate writer names and flip active state
+                for round in 0..50u32 {
+                    idx.set_last_writer(&p, format!("worker-{}-{}", i, round)).await;
+                    if round % 2 == 0 { let _ = idx.activate(&p).await; } else { let _ = idx.deactivate(&p).await; }
+                }
+            });
+            handles.push(h);
+        }
+
+        let joined = tokio::time::timeout(Duration::from_secs(5), async {
+            for h in handles {
+                h.await.unwrap();
+            }
+        })
+        .await;
+        assert!(joined.is_ok(), "concurrent operations timed out (possible deadlock)");
+
+        // Basic sanity: entries still present and have last_writer set
+        for p in paths {
+            let exists = index.with_entry(&p, |e| e.last_writer.is_some()).await.unwrap_or(false);
+            assert!(exists);
+        }
+    }
+
+    #[tokio::test]
+    async fn on_file_event_add_modify_remove_flow() {
+        let tmp = TempDirGuard3::new("fs_index_on_file_event_flow");
+        let p = tmp.path().join("data.bin");
+        write_bytes3(&p, 1024, 0xCD).await;
+
+        let index = FileIndex::new();
+
+        // Add
+        index
+            .on_file_event(&p, EventKind::Create(notify::event::CreateKind::File))
+            .await
+            .unwrap();
+        let (a, s, sz0) = index
+            .with_entry(&p, |e| (e.is_active, e.is_stale, e.file.size))
+            .await
+            .unwrap();
+        assert!(a);
+        assert!(!s);
+
+        // Modify content -> stale
+        {
+            use tokio::io::AsyncWriteExt;
+            let mut f = tokio::fs::OpenOptions::new().append(true).open(&p).await.unwrap();
+            f.write_all(&[1, 2, 3, 4]).await.unwrap();
+            f.flush().await.unwrap();
+        }
+        index
+            .on_file_event(&p, EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)))
+            .await
+            .unwrap();
+        let stale = index.with_entry(&p, |e| e.is_stale).await.unwrap();
+        assert!(stale);
+
+        // Rescan should clear stale and update size
+        index.index_stale_rescan().await.unwrap();
+        let (s2, sz1) = index
+            .with_entry(&p, |e| (e.is_stale, e.file.size))
+            .await
+            .unwrap();
+        assert!(!s2);
+        assert!(sz1 >= sz0 + 4);
+
+        // Remove: delete file then send any event; API treats missing file as remove
+        std::fs::remove_file(&p).unwrap();
+        let _ = index
+            .on_file_event(&p, EventKind::Remove(notify::event::RemoveKind::File))
+            .await;
+        let gone = index.with_entry(&p, |_| ()).await.is_none();
+        assert!(gone);
+    }
+
+    #[tokio::test]
+    async fn inactive_clean_removes_expired_inactive_entries() {
+        let tmp = TempDirGuard3::new("fs_index_inactive_clean_remove");
+        let p = tmp.path().join("old.bin");
+        write_bytes3(&p, 32, 0xEF).await;
+
+        let index = FileIndex::new();
+        index.upsert(FileEntry::new(LumoFile::new(p.clone()).await.unwrap())).await;
+
+        // Deactivate to mark as inactive
+        index.deactivate(&p).await.unwrap();
+
+        // Force last_modified far in the past to exceed threshold without sleeping 10 minutes
+        {
+            let arc_opt = {
+                let guard = index.inner.read().await;
+                guard.map.get(&p).cloned()
+            };
+            let arc = arc_opt.expect("entry must exist");
+            let mut e = arc.write().await;
+            e.last_modified = UNIX_EPOCH;
+        }
+
+        index.index_inactive_clean().await.unwrap();
+        let missing = index.with_entry(&p, |_| ()).await.is_none();
+        assert!(missing, "inactive_clean should remove long-inactive entries");
     }
 }

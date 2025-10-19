@@ -2,10 +2,9 @@ mod handlers;
 pub use handlers::AsyncHandleable;
 mod job_summary;
 use crate::core::tasks::jobs::{
-    get_first_hello_message_closure, get_job_heartbeat_closure, job_peer_table_anti_entropy,
-    launch_oneshot_job, launch_periodic_job,
+    get_first_hello_message_closure, get_job_heartbeat_closure, job_fs_stale_rescan,
+    job_peer_table_anti_entropy, launch_oneshot_job, launch_periodic_job,
 };
-pub use job_summary::JOB_TABLE;
 
 mod jobs;
 mod low_level_tasks;
@@ -49,6 +48,24 @@ pub async fn init_jobs(sender: &TaskQueueSender) -> Result<()> {
         "Periodically sends HelloMessage to inactive itself in neighbors' peer tables",
         get_job_heartbeat_closure(sender).await?,
         30,
+        sender.clone(),
+    )
+    .await?;
+
+    let fs_stable_rescan_job = launch_periodic_job(
+        "Stale job rescan",
+        "Periodically rescans stale job records from index and updates indices",
+        job_fs_stale_rescan,
+        60,
+        sender.clone(),
+    )
+    .await?;
+
+    let fs_inactive_cleanup_job = launch_periodic_job(
+        "Inactive job cleanup",
+        "Periodically cleans up inactive job records from index and updates indices",
+        jobs::job_fs_inactive_cleanup,
+        60,
         sender.clone(),
     )
     .await?;
