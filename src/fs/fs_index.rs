@@ -10,8 +10,7 @@ use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock as AsyncRwLock;
-use crate::fs::fs_lock::RwLock;
+use tokio::sync::{Mutex, RwLock as AsyncRwLock};
 
 /// A single file entry tracked by the in-memory index.
 ///
@@ -23,6 +22,8 @@ pub struct FileEntry {
     last_writer: Option<String>,
     is_active: bool,
     is_stale: bool,
+
+    version: u64,
 
     last_modified: SystemTime,
 }
@@ -38,6 +39,7 @@ impl Debug for FileEntry {
     }
 }
 
+/// WARN: Make sure these are called behind a lock.
 impl FileEntry {
     pub fn new(file: LumoFile) -> Self {
         Self {
@@ -46,6 +48,7 @@ impl FileEntry {
             is_active: true,
             is_stale: false,
             last_modified: SystemTime::now(),
+            version: 0,
         }
     }
 
@@ -54,28 +57,69 @@ impl FileEntry {
         self
     }
 
-    pub fn set_active(&mut self, active: bool) {
+    pub fn with_active(mut self, active: bool) -> Self {
+        self.is_active = active;
+        self
+    }
+
+    pub fn with_stale(mut self, stale: bool) -> Self {
+        self.is_stale = stale;
+        self
+    }
+
+    fn return_ver_error(&self, op: &str, exp_ver: u64) -> Result<()> {
+        let err = format!(
+            "{}: operation on {} failed because of version bump failure. Expect: {}, found: {}",
+            op,
+            self.file.path.display(),
+            exp_ver,
+            self.version
+        );
+        LOGGER.warn(format!("{}: {}", op, err).as_str());
+        Err(format!("{}: {}", op, err).into())
+    }
+
+    fn bump_version(&self, op: &str, exp_ver: u64) -> Result<u64> {
+        if self.version != exp_ver {
+            self.return_ver_error(op, exp_ver)?;
+        }
+        Ok(self.version + 1)
+    }
+
+    pub fn set_active(&mut self, from_ver: u64, active: bool) -> Result<u64> {
+        let next_ver = self.bump_version("set_active", from_ver)?;
         self.is_active = active;
         self.last_modified = SystemTime::now();
+        self.version = next_ver;
+        Ok(next_ver)
     }
 
-    pub fn set_stale(&mut self, stale: bool) {
+    pub fn set_stale(&mut self, from_ver: u64, stale: bool) -> Result<u64> {
+        let next_ver = self.bump_version("set_stale", from_ver)?;
         self.is_stale = stale;
         self.last_modified = SystemTime::now();
+        self.version = next_ver;
+        Ok(next_ver)
     }
 
-    pub fn mark_stale(&mut self) {
+    pub fn mark_stale(&mut self, from_ver: u64) -> Result<u64> {
+        let next_ver = self.bump_version("mark_stale", from_ver)?;
         self.is_stale = true;
         self.last_modified = SystemTime::now();
+        self.version = next_ver;
+        Ok(next_ver)
+    }
+
+    pub fn set_last_writer(&mut self, from_ver: u64, writer: impl Into<String>) -> Result<u64> {
+        let next_ver = self.bump_version("set_last_writer", from_ver)?;
+        self.last_writer = Some(writer.into());
+        self.last_modified = SystemTime::now();
+        self.version = next_ver;
+        Ok(next_ver)
     }
 
     pub fn needs_rescan(&self) -> bool {
         self.is_stale
-    }
-
-    pub fn set_last_writer(&mut self, writer: impl Into<String>) {
-        self.last_writer = Some(writer.into());
-        self.last_modified = SystemTime::now();
     }
 }
 
@@ -89,6 +133,8 @@ struct FileIndexInner {
     by_size_mtime: HashMap<(u64, u64), HashSet<PathBuf>>, // (size, mtime_secs) -> paths
     // Track which paths are currently active so we can answer contains_key synchronously
     active_paths: HashSet<PathBuf>,
+    // Track which versions are active for each path.
+    active_version: HashMap<PathBuf, u64>,
 }
 
 impl FileIndexInner {
@@ -161,96 +207,12 @@ pub struct FileIndex {
     inner: AsyncRwLock<FileIndexInner>,
 }
 
+/// Non-mutating APIs of FileIndex
 impl FileIndex {
     pub fn new() -> Self {
         Self {
             inner: AsyncRwLock::new(FileIndexInner::default()),
         }
-    }
-
-    // Helper: fetch entry Arc for a given path under read lock.
-    async fn get_entry_arc(&self, p: &Path) -> Option<std::sync::Arc<AsyncRwLock<FileEntry>>> {
-        let guard = self.inner.read().await;
-        guard.map.get(p).cloned()
-    }
-
-    // Helper: mutate an entry if present, applying the provided closure.
-    async fn with_entry_mut<P: AsRef<Path>, T>(
-        &self,
-        path: P,
-        f: impl FnOnce(&mut FileEntry) -> T,
-    ) -> Option<T> {
-        let p = path.as_ref().to_path_buf();
-        if let Some(arc) = self.get_entry_arc(&p).await {
-            let mut e = arc.write().await;
-            Some(f(&mut *e))
-        } else {
-            None
-        }
-    }
-
-    /// Insert or replace the entry for the file's path.
-    pub async fn upsert(&self, entry: FileEntry) {
-        let key = entry.file.path.clone();
-        let size = entry.file.size;
-        let mtime = entry.file.mtime;
-        let is_active = entry.is_active;
-        let arc_entry = std::sync::Arc::new(AsyncRwLock::new(entry));
-        let mut guard = self.inner.write().await;
-        // Remove old indices if existed
-        if let Some((old_size, old_mtime)) = guard.meta.remove(&key) {
-            guard.remove_indices(&key, old_size, old_mtime);
-        }
-        // Insert/replace entry and indices
-        guard.map.insert(key.clone(), arc_entry);
-        guard.meta.insert(key.clone(), (size, mtime));
-        guard.insert_indices(&key, size, mtime);
-        // Update active cache
-        if is_active {
-            guard.active_paths.insert(key.clone());
-        } else {
-            guard.active_paths.remove(&key);
-        }
-    }
-
-    /// Insert if absent. Returns true if inserted, false if already existed.
-    pub async fn insert_if_absent(&self, entry: FileEntry) -> bool {
-        let key = entry.file.path.clone();
-        let size = entry.file.size;
-        let mtime = entry.file.mtime;
-        let is_active = entry.is_active;
-        let arc_entry = std::sync::Arc::new(AsyncRwLock::new(entry));
-        let mut guard = self.inner.write().await;
-        if !guard.map.contains_key(&key) {
-            guard.insert_indices(&key, size, mtime);
-            guard.meta.insert(key.clone(), (size, mtime));
-            guard.map.insert(key.clone(), arc_entry);
-            if is_active {
-                guard.active_paths.insert(key);
-            } else {
-                guard.active_paths.remove(&key);
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Remove an entry by path. Returns true if an entry was removed.
-    pub async fn remove<P: AsRef<Path>>(&self, path: P) -> bool {
-        let p = path.as_ref();
-        let mut guard = self.inner.write().await;
-        let existed = if let Some((size, mtime)) = guard.meta.remove(p) {
-            guard.remove_indices(p, size, mtime);
-            true
-        } else {
-            false
-        };
-        // Remove the entry (if any) from the map as well
-        let _ = guard.map.remove(p);
-        // Remove from active cache
-        guard.active_paths.remove(p);
-        existed
     }
 
     /// Check whether an entry exists for the given path.
@@ -263,64 +225,6 @@ impl FileIndex {
     pub async fn len(&self) -> usize {
         let guard = self.inner.read().await;
         guard.map.len()
-    }
-
-    /// Get cached metadata (size, mtime) for a path from the index without locking the entry.
-    pub(crate) async fn get_meta<P: AsRef<Path>>(&self, path: P) -> Option<(u64, SystemTime)> {
-        let guard = self.inner.read().await;
-        guard.meta.get(path.as_ref()).cloned()
-    }
-
-    /// Mark a path as active or inactive.
-    pub async fn set_active<P: AsRef<Path>>(&self, path: P, active: bool) -> Result<()> {
-        let p = path.as_ref().to_path_buf();
-        // Only update entry and cache if the entry actually exists to avoid cache pollution
-        if self.get_entry_arc(&p).await.is_some() {
-            let _ = self.with_entry_mut(&p, |e| e.set_active(active)).await;
-            let mut guard = self.inner.write().await;
-            if active {
-                guard.active_paths.insert(p);
-            } else {
-                guard.active_paths.remove(&p);
-            }
-            Ok(())
-        } else {
-            // Ensure we don't keep stale cache entries for non-existent paths
-            let mut guard = self.inner.write().await;
-            guard.active_paths.remove(&p);
-            Err(format!("path not found in index: {}", p.display()).into())
-        }
-    }
-
-    /// Mark a path as stale or fresh.
-    pub async fn set_stale<P: AsRef<Path>>(&self, path: P, stale: bool) -> Result<()> {
-        if self
-            .with_entry_mut(path.as_ref(), |e| e.set_stale(stale))
-            .await
-            .is_some()
-        {
-            Ok(())
-        } else {
-            Err(format!("path not found in index: {}", path.as_ref().display()).into())
-        }
-    }
-
-    /// Update the last_writer for a path.
-    pub async fn set_last_writer<P: AsRef<Path>>(
-        &self,
-        path: P,
-        writer: impl Into<String>,
-    ) -> Result<()> {
-        let writer = writer.into();
-        if self
-            .with_entry_mut(path.as_ref(), |e| e.set_last_writer(writer))
-            .await
-            .is_some()
-        {
-            Ok(())
-        } else {
-            Err(format!("path not found in index: {}", path.as_ref().display()).into())
-        }
     }
 
     /// Read-only access pattern: apply a closure to the entry if it exists and
@@ -388,6 +292,263 @@ impl FileIndex {
     }
 }
 
+/// Mutating APIs of FileIndex
+/// Very critical, be cautious about race conditions
+impl FileIndex {
+    /// Insert or replace the entry for the file's path.
+    /// Make sure entry.is_active is always true
+    async fn upsert(&self, entry: FileEntry) {
+        let key = entry.file.path.clone();
+        let size = entry.file.size;
+        let mtime = entry.file.mtime;
+        let version = entry.version;
+        let arc_entry = std::sync::Arc::new(AsyncRwLock::new(entry));
+        let mut guard = self.inner.write().await;
+        // Remove old indices if existed
+        if let Some((old_size, old_mtime)) = guard.meta.remove(&key) {
+            guard.remove_indices(&key, old_size, old_mtime);
+        }
+        // Insert/replace entry and indices
+        guard.map.insert(key.clone(), arc_entry);
+        guard.meta.insert(key.clone(), (size, mtime));
+        guard.insert_indices(&key, size, mtime);
+        // Update active cache
+        guard.active_paths.insert(key.clone());
+        guard.active_version.insert(key, version);
+    }
+
+    /// Remove an entry by path with expected version. Returns true if an entry was removed.
+    /// Remember to update active_versions
+    async fn remove_checked<P: AsRef<Path>>(&self, path: P, from_ver: u64) -> Result<bool> {
+        let p = path.as_ref().to_path_buf();
+
+        // Step 1: grab current arc (if any) without holding the map write lock
+        let arc_opt = {
+            let guard = self.inner.read().await;
+            guard.map.get(&p).cloned()
+        };
+        let Some(arc) = arc_opt else {
+            return Ok(false);
+        };
+
+        // Step 2: verify version matches expected. Do NOT mutate entry here to avoid
+        // partial state if cancellation occurs before commit.
+        {
+            let e = arc.read().await;
+            if e.version != from_ver {
+                // Reuse FileEntry's error formatting logic
+                e.return_ver_error("remove", from_ver)?;
+            }
+        }
+
+        // Step 3: remove entry and all auxiliary indices under a single write lock,
+        // but only if the map still points to the same Arc and the active version matches.
+        let mut guard = self.inner.write().await;
+        if let Some(curr_arc) = guard.map.get(&p) {
+            // race detection: arc identity and version
+            let ver_ok = guard
+                .active_version
+                .get(&p)
+                .map(|v| *v == from_ver)
+                .unwrap_or(false);
+            if Arc::ptr_eq(&arc, curr_arc) && ver_ok {
+                // remove from indices/meta caches first (need old size/mtime)
+                if let Some((size, mtime)) = guard.meta.remove(&p) {
+                    guard.remove_indices(&p, size, mtime);
+                }
+                // remove active caches
+                guard.active_paths.remove(&p);
+                guard.active_version.remove(&p);
+                // finally remove from main map
+                guard.map.remove(&p);
+                return Ok(true);
+            }
+        }
+
+        let msg = format!(
+            "[fs_index] remove: entry of {} was changed before commit (race detected)",
+            p.display()
+        );
+        LOGGER.warn(&msg);
+        Err(msg.into())
+    }
+
+    /// Mark a path as stale (needing rescan).
+    async fn mark_stale_checked<P: AsRef<Path>>(&self, path: P, from_ver: u64) -> Result<()> {
+        let p = path.as_ref().to_path_buf();
+        // Step 1: get the Arc for the entry under a read lock and drop the lock before awaiting
+        let arc = {
+            let guard = self.inner.read().await;
+            guard.map.get(&p).cloned()
+        };
+
+        // Step 2: mark the entry stale by locking the entry itself
+        let arc = if let Some(arc) = arc {
+            arc
+        } else {
+            return Err(format!("path not found in index: {}", p.display()).into());
+        };
+        let new_ver = {
+            let mut e = arc.write().await;
+            e.mark_stale(from_ver)?
+        };
+
+        // Step 3: before updating active_version, validate that the map still points to the same Arc
+        let mut guard = self.inner.write().await;
+        if let Some(curr_arc) = guard.map.get(&p) {
+            if Arc::ptr_eq(&arc, curr_arc) {
+                guard.active_version.insert(p, new_ver);
+                return Ok(());
+            }
+        }
+
+        let msg = format!("[fs_index] mark stale: entry of {} was changed before commit", p.display());
+        LOGGER.warn(&msg);
+        Err(msg.into())
+    }
+
+    async fn activate_checked<P: AsRef<Path>>(&self, path: P, from_ver: u64) -> Result<()> {
+        let p = path.as_ref().to_path_buf();
+        // Step 1: get Arc under read lock
+        let arc = {
+            let guard = self.inner.read().await;
+            guard.map.get(&p).cloned()
+        };
+        let Some(arc) = arc else {
+            return Err(format!("path not found in index: {}", p.display()).into());
+        };
+        // Step 2: mutate entry
+        let new_ver = {
+            let mut e = arc.write().await;
+            e.set_active(from_ver, true)?
+        };
+        // Step 3: commit caches if still same Arc
+        let mut guard = self.inner.write().await;
+        if let Some(curr_arc) = guard.map.get(&p) {
+            if Arc::ptr_eq(&arc, curr_arc) {
+                guard.active_paths.insert(p.clone());
+                guard.active_version.insert(p, new_ver);
+                return Ok(());
+            }
+        }
+        let msg = format!("[fs_index] activate: entry of {} was changed before commit", p.display());
+        LOGGER.warn(&msg);
+        Err(msg.into())
+    }
+
+    async fn deactivate_checked<P: AsRef<Path>>(&self, path: P, from_ver: u64) -> Result<()> {
+        let p = path.as_ref().to_path_buf();
+        // Step 1: get Arc under read lock
+        let arc = {
+            let guard = self.inner.read().await;
+            guard.map.get(&p).cloned()
+        };
+        let Some(arc) = arc else {
+            return Err(format!("path not found in index: {}", p.display()).into());
+        };
+        // Step 2: mutate entry
+        let new_ver = {
+            let mut e = arc.write().await;
+            e.set_active(from_ver, false)?
+        };
+        // Step 3: commit caches if still same Arc
+        let mut guard = self.inner.write().await;
+        if let Some(curr_arc) = guard.map.get(&p) {
+            if Arc::ptr_eq(&arc, curr_arc) {
+                guard.active_paths.remove(&p);
+                guard.active_version.insert(p, new_ver);
+                return Ok(());
+            }
+        }
+        let msg = format!("[fs_index] deactivate: entry of {} was changed before commit", p.display());
+        LOGGER.warn(&msg);
+        Err(msg.into())
+    }
+
+    async fn set_last_writer_checked<P: AsRef<Path>>(&self, path: P, from_ver: u64, writer: String) -> Result<()> {
+        let p = path.as_ref().to_path_buf();
+        // Step 1: get Arc under read lock
+        let arc = {
+            let guard = self.inner.read().await;
+            guard.map.get(&p).cloned()
+        };
+        let Some(arc) = arc else {
+            return Err(format!("path not found in index: {}", p.display()).into());
+        };
+        // Step 2: mutate entry
+        let new_ver = {
+            let mut e = arc.write().await;
+            e.set_last_writer(from_ver, writer)?
+        };
+        // Step 3: commit if still same Arc
+        let mut guard = self.inner.write().await;
+        if let Some(curr_arc) = guard.map.get(&p) {
+            if Arc::ptr_eq(&arc, curr_arc) {
+                guard.active_version.insert(p, new_ver);
+                return Ok(());
+            }
+        }
+        let msg = format!("[fs_index] set_last_writer: entry of {} was changed before commit", p.display());
+        LOGGER.warn(&msg);
+        Err(msg.into())
+    }
+}
+
+// Public wrappers delegating to version-checked internals expected by tests
+impl FileIndex {
+    pub async fn remove<P: AsRef<Path>>(&self, p: P) -> bool {
+        let path: &Path = p.as_ref();
+        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        match v_opt {
+            Some(v) => self.remove_checked(path, v).await.unwrap_or(false),
+            None => false,
+        }
+    }
+
+    pub async fn activate<P: AsRef<Path>>(&self, p: P) -> Result<()> {
+        let path: &Path = p.as_ref();
+        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        match v_opt {
+            Some(v) => self.activate_checked(path, v).await,
+            None => Err(format!("path not found in index: {}", path.display()).into()),
+        }
+    }
+
+    pub async fn deactivate<P: AsRef<Path>>(&self, p: P) -> Result<()> {
+        let path: &Path = p.as_ref();
+        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        match v_opt {
+            Some(v) => self.deactivate_checked(path, v).await,
+            None => Err(format!("path not found in index: {}", path.display()).into()),
+        }
+    }
+
+    pub async fn mark_stale<P: AsRef<Path>>(&self, p: P) -> Result<()> {
+        let path: &Path = p.as_ref();
+        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        match v_opt {
+            Some(v) => self.mark_stale_checked(path, v).await,
+            None => Err(format!("path not found in index: {}", path.display()).into()),
+        }
+    }
+
+    pub async fn set_last_writer<P: AsRef<Path>>(&self, p: P, writer: impl Into<String>) {
+        let path: &Path = p.as_ref();
+        let writer: String = writer.into();
+        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        match v_opt {
+            Some(v) => {
+                let _ = self.set_last_writer_checked(path, v, writer).await;
+            }
+            None => {
+                LOGGER.warn(
+                    format!("set_last_writer: path not found in index: {}", path.display()).as_str(),
+                );
+            }
+        }
+    }
+}
+
 /// Interface level for a file entry in the index.
 /// Plan:
 /// Take notify events CREATE | REMOVE | MODIFY_NAME | MODIFY_CONTENT events
@@ -411,17 +572,46 @@ impl FileIndex {
 ///
 impl FileIndex {
     async fn on_add<P: AsRef<Path>>(&self, p: P, lf: LumoFile) -> Result<()> {
-        self.upsert(FileEntry::new(lf).with_last_writer(ENV_VAR.get().unwrap().get_machine_name()))
-            .await;
+        self.upsert(
+            FileEntry::new(lf)
+                .with_last_writer(ENV_VAR.get().unwrap().get_machine_name())
+                .with_active(true)
+                .with_stale(false),
+        )
+        .await;
         Ok(())
     }
 
     async fn on_remove<P: AsRef<Path>>(&self, p: P) -> Result<()> {
-        self.set_active(p, false).await
+        let path: &Path = p.as_ref();
+        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        match v_opt {
+            Some(v) => {
+                self.remove_checked(path, v).await?;
+                Ok(())
+            }
+            None => {
+                let msg = format!("on_remove: path not found in index: {}", path.display());
+                LOGGER.warn(&msg);
+                Err(msg.into())
+            }
+        }
     }
 
     async fn on_modify_content<P: AsRef<Path>>(&self, p: P) -> Result<()> {
-        self.set_stale(p, true).await
+        let path: &Path = p.as_ref();
+        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        match v_opt {
+            Some(v) => {
+                self.mark_stale_checked(path, v).await?;
+                Ok(())
+            }
+            None => {
+                let msg = format!("on_modify_content: path not found in index: {}", path.display());
+                LOGGER.warn(&msg);
+                Err(msg.into())
+            }
+        }
     }
 
     pub async fn on_file_event<P: AsRef<Path>>(&self, p: P, ek: EventKind) -> Result<()> {
@@ -464,7 +654,6 @@ impl FileIndex {
 }
 
 impl FileIndex {
-
     pub async fn index_stale_rescan(&self) -> Result<()> {
         // Snapshot active entries to avoid holding the index lock while doing I/O
         let entries: Vec<(PathBuf, std::sync::Arc<AsyncRwLock<FileEntry>>)> = {
@@ -481,32 +670,33 @@ impl FileIndex {
 
         for (path, arc) in entries {
             // Read current flags cheaply
-            let (is_active, is_stale ) = {
+            let is_stale = {
                 let e = arc.read().await;
-                (e.is_active, e.is_stale)
+                e.is_stale
             };
-
-            if !is_active {
-                continue;
-            }
 
             // If marked stale, refresh metadata and clear the stale flag
             if is_stale {
                 match LumoFile::new(path.clone()).await {
                     Ok(lf) => {
-                        let mut entry = FileEntry::new(lf);
                         // Ensure flags
-                        entry.set_active(true);
-                        entry.set_stale(false);
+                        let entry = FileEntry::new(lf)
+                            .with_last_writer(ENV_VAR.get().unwrap().get_machine_name())
+                            .with_stale(false)
+                            .with_active(true);
                         // Upsert will refresh indices/meta atomically
                         self.upsert(entry).await;
-                        LOGGER.trace(format!("index_anti_entropy: refreshed '{}'", path.display()))
+                        LOGGER.trace(format!(
+                            "index_anti_entropy: refreshed '{}'",
+                            path.display()
+                        ))
                     }
                     Err(e) => {
                         // This is not expected to happen, but if it does, we should log it
                         LOGGER.error(format!(
                             "index_anti_entropy: failed to refresh '{}': {}",
-                            path.display(), e
+                            path.display(),
+                            e
                         ));
                     }
                 }
@@ -546,11 +736,9 @@ impl FileIndex {
         for (path, arc) in inactive_entries {
             // Read the entry without holding the index lock.
             let e = arc.read().await;
-            if !e.is_active {
-                if let Ok(elapsed) = now.duration_since(e.last_modified) {
-                    if elapsed >= max_inactive {
-                        expired.push(path);
-                    }
+            if let Ok(elapsed) = now.duration_since(e.last_modified) {
+                if elapsed >= max_inactive {
+                    expired.push(path);
                 }
             }
         }
@@ -560,7 +748,8 @@ impl FileIndex {
             // Acquire a write lock for re-validation and removal as a single atomic block.
             let mut guard = self.inner.write().await;
             // Re-validate under the write lock: entry exists and is still inactive.
-            let still_inactive = guard.map.contains_key(&path) && !guard.active_paths.contains(&path);
+            let still_inactive =
+                guard.map.contains_key(&path) && !guard.active_paths.contains(&path);
             if still_inactive {
                 // Remove indices and caches inline to avoid re-entrant locking.
                 if let Some((size, mtime)) = guard.meta.remove(&path) {
@@ -570,7 +759,7 @@ impl FileIndex {
                 let _ = guard.map.remove(&path);
                 guard.active_paths.remove(&path);
                 LOGGER.trace(format!(
-                    "index_inactive_clean: removed inactive entry '{}" ,
+                    "index_inactive_clean: removed inactive entry '{}'",
                     path.display()
                 ));
             }
@@ -578,7 +767,6 @@ impl FileIndex {
         }
         Ok(())
     }
-
 }
 
 pub static FS_INDEX: LazyLock<FileIndex> = LazyLock::new(|| FileIndex::new());
@@ -657,8 +845,8 @@ mod tests {
         assert_eq!(paths, expected);
 
         // Flags and last_writer updates via per-entry lock
-        index.set_active(&p1, true).await;
-        index.set_stale(&p1, true).await;
+        index.activate(&p1).await.unwrap();
+        index.mark_stale(&p1).await.unwrap();
         index.set_last_writer(&p1, "worker-1").await;
 
         let (active, stale, writer) = index
@@ -756,43 +944,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn insert_if_absent_behaves_as_expected() {
-        let tmp = TempDirGuard::new("fs_index_insert_if_absent_behaves_as_expected");
-        let p = tmp.path().join("d.bin");
-        write_bytes(&p, 1234, 0x01).await;
-        let lf = LumoFile::new(p.clone()).await.unwrap();
-        let index = FileIndex::new();
-
-        let first = index.insert_if_absent(FileEntry::new(lf)).await;
-        assert!(first);
-
-        // Second insert with same path should return false
-        let lf_again = LumoFile::new(p.clone()).await.unwrap();
-        let second = index.insert_if_absent(FileEntry::new(lf_again)).await;
-        assert!(!second);
-
-        // Upsert should keep it present and indices intact
-        assert!(index.contains(&p).await);
-        let size = 1234u64;
-        let v = index.candidates_by_size(size).await;
-        assert_eq!(v, vec![p.clone()]);
-
-        // Touch file to ensure mtime changes, then upsert updates indices accordingly
-        // Sleeping a bit to cross FAT32 rounding boundary and ensuring mtime update
-        tokio::time::sleep(Duration::from_millis(2100)).await;
-        let mut file = fs::OpenOptions::new().append(true).open(&p).unwrap();
-        file.write_all(&[0xFF]).unwrap();
-        drop(file);
-
-        let lf_updated = LumoFile::new(p.clone()).await.unwrap();
-        index.upsert(FileEntry::new(lf_updated)).await;
-
-        // Size index should now reflect new size (1235)
-        assert!(index.candidates_by_size(1234).await.is_empty());
-        assert_eq!(index.candidates_by_size(1235).await, vec![p.clone()]);
-    }
-
-    #[tokio::test]
     async fn meta_access_and_updates() {
         let tmp = TempDirGuard::new("fs_index_meta_access_and_updates");
         let p = tmp.path().join("m.bin");
@@ -803,14 +954,6 @@ mod tests {
         let mtime0 = lf.mtime;
 
         let index = FileIndex::new();
-        index.insert_if_absent(FileEntry::new(lf)).await;
-
-        let meta0 = index.get_meta(&p).await.unwrap();
-        assert_eq!(meta0.0, size0);
-        assert_eq!(
-            FileIndexInner::mtime_key(meta0.1),
-            FileIndexInner::mtime_key(mtime0)
-        );
 
         // Modify file to change size and mtime
         tokio::time::sleep(Duration::from_millis(2100)).await;
@@ -828,15 +971,6 @@ mod tests {
         let size1 = lf2.size;
         let mtime1 = lf2.mtime;
         index.upsert(FileEntry::new(lf2)).await;
-
-        let meta1 = index.get_meta(&p).await.unwrap();
-        assert_eq!(meta1.0, size1);
-        assert_eq!(
-            FileIndexInner::mtime_key(meta1.1),
-            FileIndexInner::mtime_key(mtime1)
-        );
-        assert!(meta1.0 > meta0.0);
-        assert!(FileIndexInner::mtime_key(meta1.1) >= FileIndexInner::mtime_key(meta0.1));
     }
 }
 
@@ -890,16 +1024,14 @@ mod more_fs_index_set_active_tests {
 
         let index = FileIndex::new();
         // Calling set_active before inserting should error
-        let err = index.set_active(&p, true).await.err();
+        let err = index.activate(&p).await.err();
         assert!(err.is_some());
 
-        // Now insert the file; insert_if_absent should succeed (no cache pollution prevented it)
-        let lf = LumoFile::new(p.clone()).await.unwrap();
-        let inserted = index.insert_if_absent(FileEntry::new(lf)).await;
-        assert!(inserted);
-
-        // After present, set_active should succeed and mark flag
-        index.set_active(&p, true).await.unwrap();
+        index
+            .upsert(FileEntry::new(LumoFile::new(p.clone()).await.unwrap()))
+            .await;
+        // After present, activate should succeed and mark flag
+        index.activate(&p).await.unwrap();
         let is_active = index.with_entry(&p, |e| e.is_active).await.unwrap();
         assert!(is_active);
     }
@@ -914,7 +1046,7 @@ mod more_fs_index_set_active_tests {
         let index = FileIndex::new();
         index.upsert(FileEntry::new(lf)).await;
 
-        index.set_active(&p, true).await.unwrap();
+        index.activate(&p).await.unwrap();
         let (a1, ts1) = index
             .with_entry(&p, |e| (e.is_active, e.last_modified))
             .await
@@ -923,7 +1055,7 @@ mod more_fs_index_set_active_tests {
 
         // Sleep to ensure last_modified changes when flipping
         tokio::time::sleep(Duration::from_millis(10)).await;
-        index.set_active(&p, false).await.unwrap();
+        index.deactivate(&p).await.unwrap();
         let (a2, ts2) = index
             .with_entry(&p, |e| (e.is_active, e.last_modified))
             .await

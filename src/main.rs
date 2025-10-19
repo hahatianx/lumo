@@ -3,7 +3,7 @@ use crate::config::{EnvVar, Opts, get_or_create_config};
 use crate::core::init_topology;
 use crate::core::tasks::init_jobs;
 use crate::err::Result;
-use crate::fs::{FS_INDEX, init_working_dir, init_fs};
+use crate::fs::{FS_INDEX, init_fs, init_working_dir};
 use crate::global_var::{ENV_VAR, GLOBAL_VAR, GlobalVar, LOGGER, LOGGER_CELL};
 use crate::network::{init_network, terminate_network};
 use core::tasks::{init_task_queue, shutdown_core};

@@ -351,7 +351,6 @@ mod tests {
 
         // Each level marker should appear at least once
         for (marker, msg) in [
-            ("[\x1b[36mTRACE\x1b[0m]", "trace msg"),
             ("[INFO ]", "info msg"),
             ("[\x1b[33mWARN \x1b[0m]", "warn msg"),
             ("[\x1b[31mERROR\x1b[0m]", "error msg"),

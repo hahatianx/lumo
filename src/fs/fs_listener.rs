@@ -57,7 +57,10 @@ impl FsListener {
         // Begin watching
         watcher.watch(&root, RecursiveMode::Recursive)?;
 
-        LOGGER.info(format!("Start monitoring server disc folder: {}", &root.display()));
+        LOGGER.info(format!(
+            "Start monitoring server disc folder: {}",
+            &root.display()
+        ));
 
         Ok((
             Self {
