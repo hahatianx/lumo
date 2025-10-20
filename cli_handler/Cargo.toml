@@ -1,0 +1,12 @@
+[package]
+name = "cli_handler"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+quote = "1"
+syn = { version = "2", features = ["full"] }
+proc-macro2 = "1"
+
+[lib]
+proc-macro = true
