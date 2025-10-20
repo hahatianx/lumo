@@ -1,5 +1,5 @@
 use crate::fs::fs_index::FS_INDEX;
-use crate::global_var::{ENV_VAR, LOGGER};
+use crate::global_var::{ENV_VAR, GLOBAL_VAR, LOGGER};
 use notify::event::{EventKind, ModifyKind};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
@@ -111,13 +111,17 @@ fn is_ignored_name(name: &str) -> bool {
     if name.starts_with(".perm_check") {
         return true;
     }
-    // TODO: This is not a good idea.  Only filter out those starts with ${root}/.disc/
-    if name.contains(".disc") {
-        return true;
-    }
     // Ignore .sb- files, which are created by the SuperBlock when it is created.
     // TODO: add a exclude list
     if name.contains(".sb-") {
+        return true;
+    }
+    false
+}
+
+fn is_ignored_path(path: &Path) -> bool {
+    let meta_dir = PathBuf::from(ENV_VAR.get().unwrap().get_working_dir()).join(".disc");
+    if path.starts_with(&meta_dir) {
         return true;
     }
     false
@@ -137,6 +141,9 @@ fn filter_event(mut ev: Event) -> Option<Event> {
 
     // Filter paths: ignore OS junk and permission probe files; require full perms on target dir
     ev.paths.retain(|p| {
+        if is_ignored_path(p) {
+            return false;
+        }
         // ignore names like .DS_Store, desktop.ini, and any starting with .perm_check
         if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
             if is_ignored_name(name) {

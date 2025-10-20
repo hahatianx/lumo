@@ -1,6 +1,7 @@
 use notify::EventKind;
 use notify::event::{CreateKind, DataChange, ModifyKind, RemoveKind};
 use server::config::{Config, EnvVar};
+use server::fs::init_fs_index;
 use std::fs;
 use std::time::Duration;
 
@@ -59,6 +60,7 @@ async fn fs_index_integration_on_file_event_flow() {
 
     // Using the global FS_INDEX singleton
     use server::fs::FS_INDEX;
+    init_fs_index().await.expect("TODO: panic message");
 
     // Create
     FS_INDEX
@@ -118,6 +120,7 @@ async fn fs_index_integration_concurrent_events_no_deadlock() {
 
     // Using the global FS_INDEX singleton
     use server::fs::FS_INDEX;
+    init_fs_index().await.expect("TODO: panic message");
 
     let mut paths = Vec::new();
     for i in 0..4 {

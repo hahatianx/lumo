@@ -55,7 +55,7 @@ pub enum LogLevel {
 impl fmt::Display for LogLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            LogLevel::Trace => "\x1b[36mTRACE\x1b[0m",
+            LogLevel::Trace => "\x1b[38;5;214mTRACE\x1b[0m",
             LogLevel::Debug => "\x1b[34mDEBUG\x1b[0m",
             LogLevel::Info => "INFO ",
             LogLevel::Warn => "\x1b[33mWARN \x1b[0m",
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn test_log_level_display_strings() {
-        assert_eq!(format!("{}", LogLevel::Trace), "\x1b[36mTRACE\x1b[0m");
+        assert_eq!(format!("{}", LogLevel::Trace), "\x1b[38;5;214mTRACE\x1b[0m");
         assert_eq!(format!("{}", LogLevel::Debug), "\x1b[34mDEBUG\x1b[0m");
         assert_eq!(format!("{}", LogLevel::Info), "INFO ");
         assert_eq!(format!("{}", LogLevel::Warn), "\x1b[33mWARN \x1b[0m");

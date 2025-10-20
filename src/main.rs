@@ -52,7 +52,7 @@ async fn init(config: &Config) -> Result<()> {
 
     let env_var = EnvVar::from_config(config).expect("Failed to set environment variables");
 
-    let (logger, logger_handle) = init_working_dir(env_var.get_working_dir().await)
+    let (logger, logger_handle) = init_working_dir(env_var.get_working_dir())
         .await
         .expect("Failed to initialize logger");
 
@@ -62,7 +62,7 @@ async fn init(config: &Config) -> Result<()> {
     LOGGER_CELL.set(logger).expect("Logger already set");
     // LOGGER enabled starting from this point
 
-    init_fs(ENV_VAR.get().unwrap().get_working_dir().await)?;
+    init_fs(ENV_VAR.get().unwrap().get_working_dir()).await?;
 
     // Starts core initialization
     let task_queue = match init_task_queue().await {

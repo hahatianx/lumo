@@ -1,17 +1,22 @@
 use crate::err::Result;
 use crate::fs::LumoFile;
+use crate::fs::fs_op::{fs_read_bytes_deserialized, fs_save_bytes_atomic_internal};
 use crate::global_var::ENV_VAR;
 use crate::global_var::LOGGER;
 use notify::EventKind;
 use notify::event::ModifyKind;
 use rand::random;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock as AsyncRwLock;
+use tokio::sync::{OnceCell, RwLock as AsyncRwLock};
+use xxhash_rust::xxh64::{Xxh64, xxh64};
+
+static INDEX_FILE_NAME: &'static str = "lumo_index";
 
 /// A single file entry tracked by the in-memory index.
 ///
@@ -50,6 +55,17 @@ impl FileEntry {
             last_writer: None,
             is_active: true,
             is_stale: false,
+            last_modified: SystemTime::now(),
+            version: random::<u64>() % 1000,
+        }
+    }
+
+    fn new_internal(path: PathBuf, last_writer: Option<String>) -> Self {
+        Self {
+            file: LumoFile::new_init(path),
+            last_writer,
+            is_active: true,
+            is_stale: true,
             last_modified: SystemTime::now(),
             version: random::<u64>() % 1000,
         }
@@ -856,9 +872,115 @@ impl FileIndex {
     }
 }
 
-pub static FS_INDEX: LazyLock<FileIndex> = LazyLock::new(|| FileIndex::new());
+#[derive(Debug, Serialize, Deserialize)]
+struct SerializedFileEntry {
+    path: PathBuf,
+    last_writer: Option<String>,
+}
 
-pub fn init_fs_index() -> Result<&'static FileIndex> {
+#[derive(Debug, Serialize, Deserialize)]
+struct SerializedFileIndex {
+    entry_list: Vec<SerializedFileEntry>,
+}
+
+/// This is for index serialization/deserialization.
+impl FileIndex {
+    async fn to_serialized(&self) -> Result<SerializedFileIndex> {
+        let mut vecs: Vec<SerializedFileEntry> = Vec::new();
+
+        let guard = self.inner.read().await;
+        for (path, arc) in guard.map.iter() {
+            let _arc_guard = arc.read().await;
+            if !_arc_guard.is_active {
+                continue;
+            }
+            vecs.push(SerializedFileEntry {
+                path: path.clone(),
+                last_writer: _arc_guard.last_writer.clone(),
+            });
+        }
+
+        Ok(SerializedFileIndex { entry_list: vecs })
+    }
+
+    async fn from_serialized(serialized: SerializedFileIndex) -> Self {
+        let index = Self::new();
+
+        for entry in serialized.entry_list {
+            let index_entry =
+                FileEntry::new_internal(entry.path.clone(), entry.last_writer.clone());
+            index.upsert(index_entry).await;
+        }
+
+        index
+    }
+
+    pub async fn init() -> Self {
+        let index_path = PathBuf::from(ENV_VAR.get().unwrap().get_working_dir())
+            .join(".disc")
+            .join(INDEX_FILE_NAME);
+
+        match fs_read_bytes_deserialized(&index_path, |bytes| {
+            let (deserialized, _consumed) = bincode::serde::decode_from_slice::<
+                SerializedFileIndex,
+                _,
+            >(bytes, bincode::config::standard())?;
+            Ok(deserialized)
+        })
+        .await
+        {
+            Ok(serialized) => {
+                LOGGER.trace("Found index file, loading from disk");
+                Self::from_serialized(serialized).await
+            }
+            Err(_) => {
+                LOGGER.trace("No index file found, creating a new one");
+                Self::new()
+            }
+        }
+    }
+
+    pub async fn dump_index(&self, last_checksum: Option<u64>) -> Result<u64> {
+        // Resolve the working directory and ensure the.disc directory exists
+        let basic_path = PathBuf::from(ENV_VAR.get().unwrap().get_working_dir());
+        let disc_dir = basic_path.join(".disc");
+
+        // Prepare the serialized snapshot
+        let current_indices = self.to_serialized().await?;
+        let cfg = bincode::config::standard();
+        let bytes = bincode::serde::encode_to_vec(&current_indices, cfg)?;
+
+        let mut hasher = Xxh64::new(0);
+        hasher.update(bytes.as_slice());
+        let checksum = hasher.digest();
+
+        // Write atomically: write to a temp file, then rename
+        let target = disc_dir.join(INDEX_FILE_NAME);
+
+        match last_checksum {
+            Some(last_checksum) => {
+                if last_checksum == checksum {
+                    LOGGER.trace("[index dump] no change, skipping");
+                    return Ok(checksum);
+                }
+            }
+            None => {}
+        }
+
+        LOGGER.trace(format!("[index dump] writing to {}", target.display()));
+        fs_save_bytes_atomic_internal(&target, &bytes).await?;
+
+        Ok(checksum)
+    }
+}
+
+static FS_INDEX_CELL: LazyLock<OnceCell<FileIndex>> = LazyLock::new(|| OnceCell::new());
+pub static FS_INDEX: LazyLock<&'static FileIndex> = LazyLock::new(|| FS_INDEX_CELL.get().unwrap());
+
+pub async fn init_fs_index() -> Result<&'static FileIndex> {
+    FS_INDEX_CELL
+        .get_or_init(|| async { FileIndex::init().await })
+        .await;
     Ok(&FS_INDEX)
 }
 
@@ -866,7 +988,6 @@ pub fn init_fs_index() -> Result<&'static FileIndex> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::io::Write;
     use std::time::Duration;
 
     // RAII guard to ensure the temporary directory tree is deleted on drop,
@@ -1035,6 +1156,27 @@ mod tests {
 
     #[tokio::test]
     async fn meta_access_and_updates() {
+        // also validate bincode roundtrip for SerializedFileIndex
+        {
+            let tmp2 = TempDirGuard::new("fs_index_bincode_roundtrip");
+            let p1 = tmp2.path().join("s1.bin");
+            let p2 = tmp2.path().join("s2.bin");
+            write_bytes(&p1, 16, 0x10).await;
+            write_bytes(&p2, 32, 0x20).await;
+            let mut index = FileIndex::new();
+            index
+                .upsert(FileEntry::new(LumoFile::new(p1.clone()).await.unwrap()))
+                .await;
+            index
+                .upsert(FileEntry::new(LumoFile::new(p2.clone()).await.unwrap()))
+                .await;
+            let ser = index.to_serialized().await.unwrap();
+            let cfg = bincode::config::standard();
+            let bytes = bincode::serde::encode_to_vec(&ser, cfg).unwrap();
+            let (decoded, _len): (SerializedFileIndex, usize) =
+                bincode::serde::decode_from_slice(&bytes, cfg).unwrap();
+            assert_eq!(decoded.entry_list.len(), ser.entry_list.len());
+        }
         let tmp = TempDirGuard::new("fs_index_meta_access_and_updates");
         let p = tmp.path().join("m.bin");
         write_bytes(&p, 777, 0x33).await;

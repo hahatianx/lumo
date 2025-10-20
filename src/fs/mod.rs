@@ -4,12 +4,13 @@ pub mod util;
 pub use file::LumoFile;
 mod fs_index;
 pub use fs_index::FS_INDEX;
+pub use fs_index::init_fs_index;
 mod fs_lock;
+mod fs_op;
 
 pub use fs_listener::FsListener;
 
 use crate::err::Result;
-use crate::fs::fs_index::init_fs_index;
 use crate::fs::util::test_dir_existence;
 use crate::utilities::AsyncLogger;
 use crate::utilities::init_file_logger;
@@ -64,7 +65,7 @@ pub async fn init_working_dir<P: AsRef<Path>>(path: P) -> Result<(AsyncLogger, J
     Ok((logger, task))
 }
 
-pub fn init_fs<P: AsRef<Path>>(base: P) -> Result<()> {
+pub async fn init_fs<P: AsRef<Path>>(base: P) -> Result<()> {
     // Start filesystem watcher and spawn a background processor for events
     let (listener, rx) = FsListener::watch(&base).expect("should start watcher");
 
@@ -74,7 +75,7 @@ pub fn init_fs<P: AsRef<Path>>(base: P) -> Result<()> {
     // Spawn a task to process all notify events according to the required algorithm
     let _processor = FsListener::spawn_default_processor(rx);
 
-    init_fs_index()?;
+    init_fs_index().await?;
 
     Ok(())
 }

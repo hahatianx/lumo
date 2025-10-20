@@ -2,8 +2,9 @@ mod handlers;
 pub use handlers::AsyncHandleable;
 mod job_summary;
 use crate::core::tasks::jobs::{
-    get_first_hello_message_closure, get_job_heartbeat_closure, job_fs_stale_rescan,
-    job_peer_table_anti_entropy, launch_oneshot_job, launch_periodic_job,
+    get_first_hello_message_closure, get_job_fs_index_dump_closure, get_job_heartbeat_closure,
+    job_fs_inactive_cleanup, job_fs_stale_rescan, job_peer_table_anti_entropy, launch_oneshot_job,
+    launch_periodic_job,
 };
 
 mod jobs;
@@ -64,7 +65,16 @@ pub async fn init_jobs(sender: &TaskQueueSender) -> Result<()> {
     let fs_inactive_cleanup_job = launch_periodic_job(
         "Inactive job cleanup",
         "Periodically cleans up inactive job records from index and updates indices",
-        jobs::job_fs_inactive_cleanup,
+        job_fs_inactive_cleanup,
+        60,
+        sender.clone(),
+    )
+    .await?;
+
+    let fs_index_dump_job = launch_periodic_job(
+        "Dump local file index",
+        "Periodically dumps index from memory to disk",
+        get_job_fs_index_dump_closure().await?,
         60,
         sender.clone(),
     )

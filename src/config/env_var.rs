@@ -36,6 +36,11 @@ pub struct AppConfig {
     peer_expires_after_in_sec: u64,
 }
 
+#[derive(Debug)]
+pub struct StaticAppConfig {
+    working_dir: String,
+}
+
 impl AppConfig {
     pub fn get_peer_expires_after_in_sec(&self) -> u64 {
         self.peer_expires_after_in_sec
@@ -55,6 +60,7 @@ pub struct EnvVar {
     identity: Identity,
     connection: ConnectionConfig,
     pub(crate) app_config: Arc<RwLock<AppConfig>>,
+    static_app_config: StaticAppConfig,
 }
 
 impl EnvVar {
@@ -80,11 +86,14 @@ impl EnvVar {
                 working_dir: expand_tilde(&config.app_config.working_dir),
                 peer_expires_after_in_sec: 60, // hard code for now.  Change it later
             })),
+            static_app_config: StaticAppConfig {
+                working_dir: expand_tilde(&config.app_config.working_dir),
+            },
         })
     }
 
-    pub async fn get_working_dir(&self) -> String {
-        self.app_config.as_ref().read().await.working_dir.clone()
+    pub fn get_working_dir(&self) -> &str {
+        &self.static_app_config.working_dir
     }
 
     pub fn get_conn_token(&self) -> &str {
@@ -144,7 +153,7 @@ mod tests {
         assert_eq!(ev.get_conn_token(), "TOKEN123");
         assert_eq!(ev.get_port(), 14514);
         assert_eq!(
-            ev.get_working_dir().await,
+            ev.get_working_dir(),
             format!("{}/{}", expected_home, "workdir")
         );
 

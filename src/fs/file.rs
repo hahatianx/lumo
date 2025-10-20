@@ -99,6 +99,15 @@ impl LumoFile {
         }
     }
 
+    pub fn new_init(path: PathBuf) -> Self {
+        Self {
+            path,
+            size: 0,
+            mtime: SystemTime::UNIX_EPOCH,
+            fingerprint: AsyncRwLock::new(FileFingerPrint::new(0, SystemTime::UNIX_EPOCH)),
+        }
+    }
+
     /// Determine whether two LumoFile instances refer to the same underlying file or to
     /// files with identical content.
     ///

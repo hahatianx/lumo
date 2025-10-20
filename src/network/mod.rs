@@ -29,7 +29,6 @@ pub async fn init_network(task_queue: &TaskQueue) -> Result<NetworkSetup> {
     let udp_join_handle = udp_listener.into_task(move |bytes, peer| {
         if peer.ip() == ENV_VAR.get().unwrap().get_ip_addr() {
             // Ignore packets from itself
-            LOGGER.debug(format!("Ignoring packet from self: {:?}", peer));
             return;
         }
         match parse_message(&bytes) {
