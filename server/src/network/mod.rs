@@ -1,7 +1,7 @@
-mod listener;
+mod udp_listener;
 pub mod protocol;
-mod sender;
-pub use sender::NetworkSender;
+mod udp_sender;
+pub use udp_sender::NetworkSender;
 mod util;
 
 use crate::core::tasks::task_queue::TaskQueue;
@@ -12,18 +12,18 @@ pub use util::get_private_ipv4_with_mac;
 
 #[derive(Debug)]
 pub struct NetworkSetup {
-    pub sender: sender::NetworkSenderCore,
+    pub sender: udp_sender::NetworkSenderCore,
 
     // pub listener: listener::UdpListener,
-    pub listener_handle: listener::ListenerHandle,
+    pub listener_handle: udp_listener::ListenerHandle,
 }
 
 /// Initiate network connections and other setup tasks.
 /// Setup UdpSender
 /// Setup UdpListener
 pub async fn init_network(task_queue: &TaskQueue) -> Result<NetworkSetup> {
-    let udp_sender = sender::NetworkSenderCore::new_queue_worker(sender::SenderConfig::default());
-    let udp_listener = listener::UdpListener::bind().await?;
+    let udp_sender = udp_sender::NetworkSenderCore::new_queue_worker(udp_sender::SenderConfig::default());
+    let udp_listener = udp_listener::UdpListener::bind().await?;
 
     let task_queue_sender = task_queue.sender();
     let udp_join_handle = udp_listener.into_task(move |bytes, peer| match parse_message(&bytes) {

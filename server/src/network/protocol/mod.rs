@@ -1,10 +1,10 @@
 use crate::core::tasks::{AsyncHandleable, NetworkHandleable};
 use crate::err::Result;
 use crate::network::protocol::messages::hello_message::HelloMessage;
+use api_model::protocol::message::api_request_message::ApiRequestMessage;
 use api_model::protocol::protocol::Protocol;
 use api_model::protocol::token::Token;
 use bytes::Bytes;
-use api_model::protocol::message::api_request_message::ApiRequestMessage;
 
 mod consensus;
 pub mod messages;

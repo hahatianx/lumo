@@ -1,5 +1,5 @@
-mod format;
 mod action;
+mod format;
 
 use std::io::{self, Write};
 
@@ -44,7 +44,10 @@ fn main() {
                         action::list_peers::list_peers();
                     }
                     _ => {
-                        println!("Unknown command: '{}'. Type 'help' for a list of commands.", input);
+                        println!(
+                            "Unknown command: '{}'. Type 'help' for a list of commands.",
+                            input
+                        );
                     }
                 }
             }

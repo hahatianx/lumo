@@ -6,7 +6,6 @@ use crate::err::Result;
 use crate::global_var::LOGGER;
 use async_trait::async_trait;
 use std::future::Future;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;

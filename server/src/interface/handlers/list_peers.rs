@@ -17,9 +17,7 @@ pub async fn list_peers(_request: &ListPeersRequest) -> Result<ListPeersResponse
 
     let peer_response: Vec<Peer> = peers
         .iter()
-        .filter(|p| {
-            p.is_active.load(Ordering::Relaxed)
-        })
+        .filter(|p| p.is_active.load(Ordering::Relaxed))
         .map(|p| Peer {
             identifier: p.identifier.clone(),
             peer_name: p.peer_name.clone(),

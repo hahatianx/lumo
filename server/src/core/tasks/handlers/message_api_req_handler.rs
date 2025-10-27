@@ -1,7 +1,8 @@
 use crate::core::tasks::{AsyncHandleable, NetworkHandleable};
 use crate::err::Result;
-use crate::global_var::{ENV_VAR, get_msg_sender, LOGGER};
+use crate::global_var::{ENV_VAR, LOGGER, get_msg_sender};
 use crate::interface::handlers::list_peers::list_peers;
+use crate::network::protocol::HandleableNetworkProtocol;
 use api_model::protocol::message::api_request_message::{ApiRequestKind, ApiRequestMessage};
 use api_model::protocol::message::api_response_message::ApiResponseMessage;
 use api_model::protocol::protocol::Protocol;
@@ -9,7 +10,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::str::FromStr;
-use crate::network::protocol::HandleableNetworkProtocol;
 
 async fn run_handler(api_request_kind: &ApiRequestKind) -> Result<Bytes> {
     let response = match api_request_kind {

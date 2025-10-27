@@ -92,7 +92,7 @@ impl UdpListener {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::sender::{NetworkSenderCore, SenderConfig};
+    use crate::network::udp_sender::{NetworkSenderCore, SenderConfig};
     use bytes::Bytes;
     use std::time::Duration;
     use tokio::sync::oneshot;

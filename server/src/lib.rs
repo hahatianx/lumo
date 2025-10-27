@@ -3,6 +3,7 @@ pub mod constants;
 pub mod core;
 pub mod err;
 pub mod fs;
+pub mod global_index;
 pub mod global_var;
 pub mod interface;
 pub mod network;
