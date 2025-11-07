@@ -1,11 +1,10 @@
 use crate::core::tasks::AsyncHandleable;
-use crate::core::tasks::job_summary::{JOB_TABLE, JobSummary, JobType};
+use crate::core::tasks::job_summary::{JOB_TABLE, JobStatus, JobSummary, JobType};
 use crate::core::tasks::task_queue::TaskQueueSender;
 use crate::err::Result;
 use crate::global_var::LOGGER;
 use async_trait::async_trait;
 use std::future::Future;
-use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::select;
 
@@ -90,9 +89,10 @@ where
     let job_summary = JobSummary::new(
         String::from(job_name),
         String::from(summary),
+        JobStatus::Running,
         JobType::Periodic,
         period,
-        shutdown_tx,
+        Some(shutdown_tx),
     );
     task_queue_sender.send(Box::new(job)).await?;
     Ok(JOB_TABLE.insert_job(job_summary).await?)

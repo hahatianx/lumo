@@ -1,7 +1,9 @@
-mod udp_listener;
 pub mod protocol;
+mod udp_listener;
 mod udp_sender;
 pub use udp_sender::NetworkSender;
+mod tcp_listener;
+mod tcp_sender;
 mod util;
 
 use crate::core::tasks::task_queue::TaskQueue;
@@ -22,7 +24,8 @@ pub struct NetworkSetup {
 /// Setup UdpSender
 /// Setup UdpListener
 pub async fn init_network(task_queue: &TaskQueue) -> Result<NetworkSetup> {
-    let udp_sender = udp_sender::NetworkSenderCore::new_queue_worker(udp_sender::SenderConfig::default());
+    let udp_sender =
+        udp_sender::NetworkSenderCore::new_queue_worker(udp_sender::SenderConfig::default());
     let udp_listener = udp_listener::UdpListener::bind().await?;
 
     let task_queue_sender = task_queue.sender();

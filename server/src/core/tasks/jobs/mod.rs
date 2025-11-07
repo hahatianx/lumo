@@ -9,17 +9,16 @@ use std::future::Future;
 use std::pin::Pin;
 mod job_fs_anti_entropy;
 mod job_fs_index_dump;
+mod job_genre;
 mod job_heartbeat;
-mod oneshot_job;
-mod periodic_job;
 
 use crate::core::tasks::job_summary::JobStatus;
-pub use oneshot_job::launch_oneshot_job;
-pub use periodic_job::launch_periodic_job;
+pub use job_genre::oneshot_job::launch_oneshot_job;
+pub use job_genre::periodic_job::launch_periodic_job;
 
 // A boxed closure that yields a boxed, pinned Future resolving to Result<()>.
 pub type JobClosure =
     dyn FnMut() -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> + Send + 'static;
-pub type CallbackFunction = dyn FnMut(JobStatus, String) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>
+pub type JobSummaryStatusCallback = dyn FnMut(JobStatus, String) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>
     + Send
     + 'static;

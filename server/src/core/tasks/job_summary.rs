@@ -1,7 +1,7 @@
 use crate::err::Result;
 use crate::global_var::LOGGER;
 use std::cmp::PartialEq;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::sync::{Arc, LazyLock};
 use tokio::sync::RwLock;
 
@@ -13,16 +13,32 @@ pub enum JobStatus {
     Completed,
     Failed,
     TimedOut,
+    Pending,
     Shutdown,
+}
+
+impl Display for JobStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JobStatus::Running => write!(f, "Running"),
+            JobStatus::Completed => write!(f, "Completed"),
+            JobStatus::Failed => write!(f, "Failed"),
+            JobStatus::TimedOut => write!(f, "TimedOut"),
+            JobStatus::Pending => write!(f, "Pending"),
+            JobStatus::Shutdown => write!(f, "Shutdown"),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
 pub enum JobType {
     Periodic,
     OneTime,
+    Claimable,
 }
 
 pub struct JobSummary {
+    job_id: u64,
     job_name: String,
     launched_time: chrono::DateTime<chrono::Utc>,
     complete_time: Option<chrono::DateTime<chrono::Utc>>,
@@ -41,7 +57,8 @@ impl Debug for JobSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            " {{ JobSummary job_name: {}, launched_time: {}, complete_time: {:?}, job_status: {:?}, msg: {:?} }}\n",
+            " {{ JobSummary job_id: {}, job_name: {}, launched_time: {}, complete_time: {:?}, job_status: {:?}, msg: {:?} }}\n",
+            format!("{:x}", &self.job_id),
             &self.job_name,
             &self.launched_time,
             &self.complete_time,
@@ -55,25 +72,46 @@ impl JobSummary {
     pub fn new(
         job_name: String,
         summary: String,
+        job_status: JobStatus,
         job_type: JobType,
         period: Option<chrono::Duration>,
-        shutdown_tx: tokio::sync::oneshot::Sender<()>,
+        shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Self {
         Self {
+            job_id: rand::random::<u64>(),
             job_name,
             launched_time: chrono::Utc::now(),
             complete_time: None,
-            status: JobStatus::Running,
+            status: job_status,
             status_msg: None,
             job_type,
             period,
             summary,
-            shutdown_tx: Some(shutdown_tx),
+            shutdown_tx,
         }
     }
 
     pub async fn update_status(&mut self, new_status: JobStatus) {
         self.status = new_status;
+    }
+
+    pub async fn start_job(&mut self) -> Result<()> {
+        if self.status != JobStatus::Pending {
+            let error_msg = format!(
+                "Failed to start job {} because it's not pending. Status found: {:?}",
+                &self.job_name, &self.status
+            );
+            LOGGER.error(&error_msg);
+            return Err(error_msg.into());
+        }
+        self.status = JobStatus::Running;
+        LOGGER.info(format!(
+            "Job {} status change {} -> {}",
+            &self.job_name,
+            JobStatus::Pending,
+            JobStatus::Running
+        ));
+        Ok(())
     }
 
     pub async fn end_job(&mut self, status: JobStatus, status_msg: String) -> Result<()> {
@@ -89,6 +127,13 @@ impl JobSummary {
         self.complete_time = Some(end_time);
         self.status = status;
         self.status_msg = Some(status_msg);
+        LOGGER.info(format!(
+            "Job {} status change {} -> {}, status message {}",
+            &self.job_name,
+            JobStatus::Running,
+            status,
+            self.status_msg.as_ref().unwrap_or(&String::from("None")),
+        ));
         Ok(())
     }
 

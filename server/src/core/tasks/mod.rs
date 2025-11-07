@@ -27,7 +27,7 @@ pub async fn shutdown_core(task_queue: TaskQueue) -> Result<()> {
 }
 
 pub async fn init_jobs(sender: &TaskQueueSender) -> Result<()> {
-    let peer_table_anti_entropy_job = launch_periodic_job(
+    let _peer_table_anti_entropy_job = launch_periodic_job(
         "Peer table anti-entropy",
         "Scans and invalidates expired peers in a periodic fashion",
         job_peer_table_anti_entropy,
@@ -36,7 +36,7 @@ pub async fn init_jobs(sender: &TaskQueueSender) -> Result<()> {
     )
     .await?;
 
-    let first_hello_message_job = launch_oneshot_job(
+    let _first_hello_message_job = launch_oneshot_job(
         "Server merged into network",
         "Send out the first HelloMessage and receive response",
         get_first_hello_message_closure(sender).await?,
@@ -45,7 +45,7 @@ pub async fn init_jobs(sender: &TaskQueueSender) -> Result<()> {
     )
     .await?;
 
-    let heartbeat_job = launch_periodic_job(
+    let _heartbeat_job = launch_periodic_job(
         "Heartbeat",
         "Periodically sends HelloMessage to inactive itself in neighbors' peer tables",
         get_job_heartbeat_closure(sender).await?,
@@ -54,7 +54,7 @@ pub async fn init_jobs(sender: &TaskQueueSender) -> Result<()> {
     )
     .await?;
 
-    let fs_stable_rescan_job = launch_periodic_job(
+    let _fs_stable_rescan_job = launch_periodic_job(
         "Stale job rescan",
         "Periodically rescans stale job records from index and updates indices",
         job_fs_stale_rescan,
@@ -63,7 +63,7 @@ pub async fn init_jobs(sender: &TaskQueueSender) -> Result<()> {
     )
     .await?;
 
-    let fs_inactive_cleanup_job = launch_periodic_job(
+    let _fs_inactive_cleanup_job = launch_periodic_job(
         "Inactive job cleanup",
         "Periodically cleans up inactive job records from index and updates indices",
         job_fs_inactive_cleanup,
@@ -72,7 +72,7 @@ pub async fn init_jobs(sender: &TaskQueueSender) -> Result<()> {
     )
     .await?;
 
-    let fs_index_dump_job = launch_periodic_job(
+    let _fs_index_dump_job = launch_periodic_job(
         "Dump local file index",
         "Periodically dumps index from memory to disk",
         get_job_fs_index_dump_closure().await?,

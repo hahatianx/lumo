@@ -7,6 +7,7 @@ pub use fs_index::FS_INDEX;
 pub use fs_index::init_fs_index;
 mod fs_lock;
 mod fs_op;
+mod fs_task;
 
 pub use fs_listener::FsListener;
 

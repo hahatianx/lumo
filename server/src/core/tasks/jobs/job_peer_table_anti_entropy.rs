@@ -11,7 +11,7 @@
 //! See also:
 //! - [`crate::core::topology::peer_table::PeerTable::peer_table_anti_entropy`]
 //!   for the underlying logic.
-//! - [`crate::core::tasks::jobs::periodic_job::launch_periodic_job`] for how to
+//! - [`crate::core::tasks::jobs::job_genre::periodic_job::launch_periodic_job`] for how to
 //!   schedule periodic jobs.
 
 use crate::core::PEER_TABLE;

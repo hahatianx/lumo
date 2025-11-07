@@ -1,6 +1,6 @@
 use crate::core::tasks::AsyncHandleable;
 use crate::core::tasks::job_summary::{JOB_TABLE, JobStatus, JobSummary, JobType};
-use crate::core::tasks::jobs::CallbackFunction;
+use crate::core::tasks::jobs::JobSummaryStatusCallback;
 use crate::core::tasks::task_queue::TaskQueueSender;
 use crate::err::Result;
 use crate::global_var::LOGGER;
@@ -27,7 +27,7 @@ where
     job: J,
     timeout_in_seconds: u64, // 0 means no timeout
 
-    callback: Option<Box<CallbackFunction>>,
+    callback: Option<Box<JobSummaryStatusCallback>>,
 }
 
 impl<J, F> OneshotJob<J, F>
@@ -49,7 +49,7 @@ where
         self
     }
 
-    pub fn update_callback(&mut self, callback: Box<CallbackFunction>) {
+    pub fn update_callback(&mut self, callback: Box<JobSummaryStatusCallback>) {
         self.callback = Some(callback);
     }
 
@@ -100,20 +100,28 @@ where
                 self.callback.as_mut().unwrap()(JobStatus::Failed, failure_msg).await?;
             }
             OneshotJobResult::TimedOut => {
-                self.callback.as_mut().unwrap()(JobStatus::TimedOut, String::new()).await?;
+                self.callback.as_mut().unwrap()(
+                    JobStatus::TimedOut,
+                    format!("Job expired after {} seconds", self.timeout_in_seconds),
+                )
+                .await?;
             }
         }
         Ok(())
     }
 }
 
-fn generate_callback_closure(_job_summary: Arc<RwLock<JobSummary>>) -> Box<CallbackFunction> {
-    Box::new(move |_job_status, _job_name| {
+fn generate_callback_closure(
+    _job_summary: Arc<RwLock<JobSummary>>,
+) -> Box<JobSummaryStatusCallback> {
+    Box::new(move |_job_status, _job_status_msg| {
         let job_summary_clone = _job_summary.clone();
         Box::pin(async move {
             {
                 let mut job_summary_guard = job_summary_clone.write().await;
-                job_summary_guard.end_job(_job_status, _job_name).await?;
+                job_summary_guard
+                    .end_job(_job_status, _job_status_msg)
+                    .await?;
             }
             Ok(())
         })
@@ -131,18 +139,18 @@ where
     J: FnMut() -> F + Send + 'static,
     F: Future<Output = Result<()>> + Send + 'static,
 {
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let mut job =
         OneshotJob::new(String::from(job_name), job).with_maybe_timeout(timeout_in_seconds);
 
     let job_summary = JobSummary::new(
         String::from(job_name),
         String::from(summary),
+        JobStatus::Running,
         JobType::OneTime,
         Some(chrono::Duration::seconds(
             timeout_in_seconds.unwrap_or(0) as i64
         )),
-        shutdown_tx,
+        None,
     );
 
     let job_idx = JOB_TABLE.insert_job(job_summary).await?;
