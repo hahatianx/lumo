@@ -1,5 +1,6 @@
 use crate::err::Result;
 use crate::protocol::models::list_peers::ListPeersResponse;
+use crate::protocol::models::local_pull_file::LocalPullFileResponse;
 use crate::protocol::protocol::Protocol;
 use crate::protocol::token::Token;
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub enum ApiResponseKind {
     Error(String),
     ListPeers(ListPeersResponse),
+    LocalPullFile(LocalPullFileResponse),
 }
 
 #[derive(Debug, Clone)]

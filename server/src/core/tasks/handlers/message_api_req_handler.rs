@@ -2,6 +2,7 @@ use crate::core::tasks::{AsyncHandleable, NetworkHandleable};
 use crate::err::Result;
 use crate::global_var::{ENV_VAR, LOGGER, get_msg_sender};
 use crate::interface::handlers::list_peers::list_peers;
+use crate::interface::handlers::local_pull_file::local_pull_file;
 use crate::network::protocol::HandleableNetworkProtocol;
 use api_model::protocol::message::api_request_message::{ApiRequestKind, ApiRequestMessage};
 use api_model::protocol::message::api_response_message::ApiResponseMessage;
@@ -14,6 +15,7 @@ use std::str::FromStr;
 async fn run_handler(api_request_kind: &ApiRequestKind) -> Result<Bytes> {
     let response = match api_request_kind {
         ApiRequestKind::ListPeers(req) => list_peers(req).await,
+        ApiRequestKind::LocalPullFile(req) => local_pull_file(req).await,
         _ => return Err(format!("Handler for {:?} not found", api_request_kind).into()),
     };
     let vec = ApiResponseMessage { response }.serialize();

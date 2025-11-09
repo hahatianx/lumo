@@ -1,60 +1,48 @@
 mod action;
-mod format;
+mod cli;
 
-use std::io::{self, Write};
+use clap::{Parser, Subcommand};
+use crate::cli::local_file::LocalFileCommands;
+use crate::cli::peer::PeerCommands;
+use crate::cli::task::TaskCommands;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "local-disc-client",
+    version,
+    about = "Local-Disc client CLI",
+    propagate_version = true
+)]
+pub struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Commands {
+    #[command(name = "peer", about = "Peer related commands")]
+    Peer {
+        #[command(subcommand)]
+        command: PeerCommands,
+    },
+    #[command(name = "task", about = "Task related commands")]
+    Task {
+        #[command(subcommand)]
+        command: TaskCommands,
+    },
+    #[command(name = "local-file", about = "File related commands")]
+    LocalFile {
+        #[command(subcommand)]
+        command: LocalFileCommands,
+    },
+}
+
 
 fn main() {
-    println!("Local-Disc Client CLI");
-    println!("Type 'help' to see available commands. Type 'exit' to quit.\n");
-
-    let stdin = io::stdin();
-    let mut line = String::new();
-
-    loop {
-        print!("{}", format::prompt());
-        // Flush stdout so prompt appears immediately
-        let _ = io::stdout().flush();
-
-        line.clear();
-        let bytes = stdin.read_line(&mut line);
-        match bytes {
-            Ok(0) => {
-                // EOF (Ctrl-D)
-                println!("\nGoodbye.");
-                break;
-            }
-            Ok(_) => {
-                let input = line.trim();
-                if input.is_empty() {
-                    continue;
-                }
-
-                // Simple command parsing by first token
-                let mut parts = input.split_whitespace();
-                let cmd = parts.next().unwrap_or("");
-                match cmd {
-                    "help" => {
-                        print!("{}", format::help_text());
-                    }
-                    "exit" | "quit" => {
-                        println!("Goodbye.");
-                        break;
-                    }
-                    "list-peers" => {
-                        action::list_peers::list_peers();
-                    }
-                    _ => {
-                        println!(
-                            "Unknown command: '{}'. Type 'help' for a list of commands.",
-                            input
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Error reading input: {}", e);
-                break;
-            }
-        }
+    let cli = Cli::parse();
+    match &cli.command {
+        Commands::Peer { command } => cli::peer::handle_peer_commands(command),
+        Commands::Task { command } => cli::task::handle_task_commands(command),
+        Commands::LocalFile { command } => cli::local_file::handle_local_file_commands(command),
     }
 }

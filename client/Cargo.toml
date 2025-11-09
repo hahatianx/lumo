@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 api_model = { path = "../api_model" }
+clap = { version = "4.5", features = ["derive"] }

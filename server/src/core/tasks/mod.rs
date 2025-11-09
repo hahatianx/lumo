@@ -12,6 +12,9 @@ mod jobs;
 mod low_level_tasks;
 pub mod task_queue;
 
+// Re-export public job utilities for external modules
+pub use jobs::job_genre::claimable_job::{ClaimableJobHandle, launch_claimable_job};
+
 use crate::core::tasks::task_queue::{TaskQueue, TaskQueueSender};
 use crate::err::Result;
 

@@ -19,7 +19,11 @@ use tokio::sync::RwLock;
 /// that external async tasks can observe and "take over" (attach real work).
 /// If no takeover occurs within `timeout_in_seconds`, the job times out and
 /// its callback is invoked with `JobStatus::TimedOut`.
-pub struct ClaimableJob {
+pub struct ClaimableJob<J, F>
+where
+    J: FnMut() -> F + Send + 'static,
+    F: Future<Output = Result<()>> + Send + 'static,
+{
     /// Human-readable name for diagnostics/metrics.
     job_name: String,
 
@@ -27,6 +31,9 @@ pub struct ClaimableJob {
 
     /// the sender to pass over ownership of job summary callback to the actor.
     take_over_callback: Option<tokio::sync::oneshot::Sender<Option<Box<JobSummaryStatusCallback>>>>,
+
+    /// When the job times out, call clean_up_closure
+    clean_up_closure: J,
 
     /// Maximum time in seconds that the job will wait for a takeover before
     /// it triggers a timeout.
@@ -38,7 +45,11 @@ pub struct ClaimableJob {
 }
 
 #[async_trait]
-impl AsyncHandleable for ClaimableJob {
+impl<J, F> AsyncHandleable for ClaimableJob<J, F>
+where
+    J: FnMut() -> F + Send + 'static,
+    F: Future<Output = Result<()>> + Send + 'static,
+{
     /// Handles the job by waiting for a takeover until the configured timeout.
     ///
     /// Current behavior:
@@ -66,23 +77,30 @@ impl AsyncHandleable for ClaimableJob {
                 if let Some(sender) = self.take_over_callback.take() {
                     let _ = sender.send(None);
                 }
+                (self.clean_up_closure)().await?;
             }
         }
         Ok(())
     }
 }
 
-impl ClaimableJob {
+impl<J, F> ClaimableJob<J, F>
+where
+    J: FnMut() -> F + Send + 'static,
+    F: Future<Output = Result<()>> + Send + 'static,
+{
     pub fn new(
         job_name: &str,
         timeout_in_seconds: u64,
         take_over_receiver: tokio::sync::oneshot::Receiver<()>,
         take_over_callback: tokio::sync::oneshot::Sender<Option<Box<JobSummaryStatusCallback>>>,
+        clean_up_closure: J,
     ) -> Self {
         Self {
             job_name: String::from(job_name),
             take_over_indicator: take_over_receiver,
             take_over_callback: Some(take_over_callback),
+            clean_up_closure,
             timeout_in_seconds,
             callback: None,
         }
@@ -136,7 +154,9 @@ impl ClaimableJobHandle {
         }
     }
 
-    pub async fn take_over(self) -> std::result::Result<Box<JobSummaryStatusCallback>, ClaimableJobTakeoverError> {
+    pub async fn take_over(
+        self,
+    ) -> std::result::Result<Box<JobSummaryStatusCallback>, ClaimableJobTakeoverError> {
         self.take_over_indicator
             .send(())
             .map_err(|_| ClaimableJobTakeoverError::JobDropped)?;
@@ -148,12 +168,17 @@ impl ClaimableJobHandle {
     }
 }
 
-pub async fn launch_claimable_job(
+pub async fn launch_claimable_job<J, F>(
     job_name: &str,
     summary: &str,
+    clean_up_closure: J,
     timeout_in_seconds: u64,
     task_queue_sender: TaskQueueSender,
-) -> Result<ClaimableJobHandle> {
+) -> Result<ClaimableJobHandle>
+where
+    J: FnMut() -> F + Send + 'static,
+    F: Future<Output = Result<()>> + Send + 'static,
+{
     let (take_over_indicator, take_over_receiver) = tokio::sync::oneshot::channel::<()>();
     let (take_over_callback_sender, take_over_callback_recv) =
         tokio::sync::oneshot::channel::<Option<Box<JobSummaryStatusCallback>>>();
@@ -163,6 +188,7 @@ pub async fn launch_claimable_job(
         timeout_in_seconds,
         take_over_receiver,
         take_over_callback_sender,
+        clean_up_closure,
     );
 
     let job_summary = JobSummary::new(

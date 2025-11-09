@@ -7,7 +7,8 @@ pub use fs_index::FS_INDEX;
 pub use fs_index::init_fs_index;
 mod fs_lock;
 mod fs_op;
-mod fs_task;
+mod task_management;
+pub use task_management::file_request_tasks::process_pull_request;
 
 pub use fs_listener::FsListener;
 

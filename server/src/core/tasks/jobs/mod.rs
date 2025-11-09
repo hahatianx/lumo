@@ -9,8 +9,11 @@ use std::future::Future;
 use std::pin::Pin;
 mod job_fs_anti_entropy;
 mod job_fs_index_dump;
-mod job_genre;
+pub mod job_genre;
 mod job_heartbeat;
+
+// Re-export claimable job utilities for external modules
+pub use job_genre::claimable_job::{ClaimableJobHandle, launch_claimable_job};
 
 use crate::core::tasks::job_summary::JobStatus;
 pub use job_genre::oneshot_job::launch_oneshot_job;
