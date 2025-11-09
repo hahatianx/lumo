@@ -1,5 +1,5 @@
-use clap::Subcommand;
 use crate::action;
+use clap::Subcommand;
 
 #[derive(Debug, Subcommand)]
 pub enum PeerCommands {

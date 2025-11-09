@@ -1,6 +1,6 @@
 use crate::core::PEER_TABLE;
 use crate::err::Result;
-use api_model::protocol::models::list_peers::{ListPeersRequest, ListPeersResponse, Peer};
+use api_model::protocol::models::peer::list_peers::{ListPeersRequest, ListPeersResponse, Peer};
 use cli_handler::cli_handler;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

@@ -1,2 +1,3 @@
-pub mod list_peers;
-pub mod local_pull_file;
+pub mod local_file;
+pub mod peer;
+pub mod task;

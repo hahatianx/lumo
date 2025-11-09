@@ -6,11 +6,10 @@ use cli_handler::cli_impl;
 use std::time::SystemTime;
 
 #[cli_impl]
-pub fn list_peers() -> Result<(), ClientError> {
+pub fn list_tasks() -> Result<(), ClientError> {
     let start_time = SystemTime::now();
 
     let conn = Connection::new(None)?;
-
     let res = conn.request(ApiRequestKind::ListTasks(ListTasksRequest))?;
     println!("{:?}", res);
 

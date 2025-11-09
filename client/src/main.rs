@@ -1,10 +1,11 @@
 mod action;
 mod cli;
+mod error;
 
-use clap::{Parser, Subcommand};
 use crate::cli::local_file::LocalFileCommands;
 use crate::cli::peer::PeerCommands;
 use crate::cli::task::TaskCommands;
+use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -36,7 +37,6 @@ pub enum Commands {
         command: LocalFileCommands,
     },
 }
-
 
 fn main() {
     let cli = Cli::parse();

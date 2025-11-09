@@ -1,5 +1,6 @@
 use crate::config::EnvVar;
 use crate::core::tasks::task_queue::TaskQueue;
+use crate::core::tasks::task_queue::TaskQueueSender;
 use crate::err::Result;
 use crate::network::{NetworkSender, NetworkSetup};
 use crate::utilities::AsyncLogger;
@@ -39,4 +40,17 @@ pub async fn get_msg_sender() -> Result<NetworkSender> {
         .sender
         .sender();
     Ok(sender)
+}
+
+pub async fn get_task_queue_sender() -> Result<TaskQueueSender> {
+    let task_queue_sender = GLOBAL_VAR
+        .get()
+        .unwrap()
+        .task_queue
+        .lock()
+        .await
+        .as_ref()
+        .unwrap()
+        .sender();
+    Ok(task_queue_sender)
 }

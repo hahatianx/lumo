@@ -37,20 +37,30 @@ pub enum JobType {
     Claimable,
 }
 
+impl Display for JobType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JobType::Periodic => write!(f, "Periodic"),
+            JobType::OneTime => write!(f, "OneTime"),
+            JobType::Claimable => write!(f, "Claimable"),
+        }
+    }
+}
+
 pub struct JobSummary {
-    job_id: u64,
-    job_name: String,
-    launched_time: chrono::DateTime<chrono::Utc>,
-    complete_time: Option<chrono::DateTime<chrono::Utc>>,
+    pub job_id: u64,
+    pub job_name: String,
+    pub launched_time: chrono::DateTime<chrono::Utc>,
+    pub complete_time: Option<chrono::DateTime<chrono::Utc>>,
 
-    status: JobStatus,
-    status_msg: Option<String>,
+    pub status: JobStatus,
+    pub status_msg: Option<String>,
 
-    job_type: JobType,
-    period: Option<chrono::Duration>,
-    summary: String,
+    pub job_type: JobType,
+    pub period: Option<chrono::Duration>,
+    pub summary: String,
 
-    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    pub shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl Debug for JobSummary {
@@ -91,6 +101,21 @@ impl JobSummary {
         }
     }
 
+    pub fn proxy(&self) -> Self {
+        Self {
+            job_id: self.job_id,
+            job_name: self.job_name.clone(),
+            launched_time: self.launched_time,
+            complete_time: self.complete_time,
+            status: self.status,
+            status_msg: self.status_msg.clone(),
+            job_type: self.job_type,
+            period: self.period,
+            summary: self.summary.clone(),
+            shutdown_tx: None,
+        }
+    }
+
     pub async fn update_status(&mut self, new_status: JobStatus) {
         self.status = new_status;
     }
@@ -115,9 +140,9 @@ impl JobSummary {
     }
 
     pub async fn end_job(&mut self, status: JobStatus, status_msg: String) -> Result<()> {
-        if self.status != JobStatus::Running {
+        if self.status != JobStatus::Running && self.status != JobStatus::Pending {
             let error_msg = format!(
-                "Failed to end job {} because it's not running. Status found: {:?}",
+                "Failed to end job {} because it's already terminated. Status found: {:?}",
                 &self.job_name, &self.status
             );
             LOGGER.error(&error_msg);
@@ -209,5 +234,19 @@ impl JobTable {
             eprintln!("{:?}", &job);
         }
         Ok(())
+    }
+
+    pub async fn fetch_job_details(&self) -> Result<Box<Vec<Option<JobSummary>>>> {
+        let table = self.jobs.read().await;
+        let res = Box::new(
+            table
+                .iter()
+                .map(|job| match job.try_read() {
+                    Ok(job_summary) => Some(job_summary.proxy()),
+                    Err(_e) => None,
+                })
+                .collect(),
+        );
+        Ok(res)
     }
 }

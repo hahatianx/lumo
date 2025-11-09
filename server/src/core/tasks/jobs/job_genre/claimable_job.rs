@@ -9,6 +9,7 @@ use crate::core::tasks::job_summary::{JOB_TABLE, JobStatus, JobSummary, JobType}
 use crate::core::tasks::jobs::JobSummaryStatusCallback;
 use crate::core::tasks::task_queue::TaskQueueSender;
 use crate::err::Result;
+use crate::global_var::LOGGER;
 use async_trait::async_trait;
 use tokio::select;
 use tokio::sync::RwLock;
@@ -44,6 +45,42 @@ where
     callback: Option<Box<JobSummaryStatusCallback>>,
 }
 
+impl<J, F> ClaimableJob<J, F>
+where
+    J: FnMut() -> F + Send + 'static,
+    F: Future<Output = Result<()>> + Send + 'static,
+{
+    async fn handle_job_timeout(&mut self) -> Result<()> {
+        // Timeout occurred before any actor took over. Mark as timed out
+        // and notify potential waiters that there is no callback to claim.
+        LOGGER.debug(format!(
+            "Job {} expired after {} seconds",
+            self.job_name, self.timeout_in_seconds
+        ));
+        self.callback.as_mut().unwrap()(
+            JobStatus::TimedOut,
+            format!("Job expired after {} seconds", self.timeout_in_seconds),
+        )
+        .await?;
+        if let Some(sender) = self.take_over_callback.take() {
+            let _ = sender.send(None);
+        }
+        (self.clean_up_closure)().await?;
+        Ok(())
+    }
+
+    async fn handle_job_takeover(&mut self) -> Result<()> {
+        // An external actor has claimed the job. Mark as running and
+        // transfer ownership of the callback to the actor.
+        LOGGER.debug(format!("Job {} claimed by actor", self.job_name));
+        self.callback.as_mut().unwrap()(JobStatus::Running, String::new()).await?;
+        if let Some(sender) = self.take_over_callback.take() {
+            let _ = sender.send(self.callback.take());
+        }
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl<J, F> AsyncHandleable for ClaimableJob<J, F>
 where
@@ -62,23 +99,13 @@ where
         }
         select! {
             biased;
-            _ = &mut self.take_over_indicator => {
-                // An external actor has claimed the job. Mark as running and
-                // transfer ownership of the callback to the actor.
-                self.callback.as_mut().unwrap()(JobStatus::Running, String::new()).await?;
-                if let Some(sender) = self.take_over_callback.take() {
-                    let _ = sender.send(self.callback.take());
+            result = &mut self.take_over_indicator => {
+                match result {
+                    Ok(_) => self.handle_job_takeover().await?,
+                    _ => self.handle_job_timeout().await?,
                 }
-            },
-            _ = tokio::time::sleep(std::time::Duration::from_secs(self.timeout_in_seconds)) => {
-                // Timeout occurred before any actor took over. Mark as timed out
-                // and notify potential waiters that there is no callback to claim.
-                self.callback.as_mut().unwrap()(JobStatus::TimedOut, format!("Job expired after {} seconds", self.timeout_in_seconds)).await?;
-                if let Some(sender) = self.take_over_callback.take() {
-                    let _ = sender.send(None);
-                }
-                (self.clean_up_closure)().await?;
             }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(self.timeout_in_seconds)) => self.handle_job_timeout().await?,
         }
         Ok(())
     }
@@ -202,8 +229,7 @@ where
     let job_idx = JOB_TABLE.insert_job(job_summary).await?;
     let job_detail = JOB_TABLE.get_job(job_idx).await?;
     job.update_callback(generate_callback_closure(job_detail));
-    task_queue_sender.send(Box::new(job)).await?;
-
     let job_handle = ClaimableJobHandle::new(take_over_callback_recv, take_over_indicator);
+    task_queue_sender.send(Box::new(job)).await?;
     Ok(job_handle)
 }

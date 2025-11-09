@@ -8,7 +8,10 @@ pub use fs_index::init_fs_index;
 mod fs_lock;
 mod fs_op;
 mod task_management;
-pub use task_management::file_request_tasks::process_pull_request;
+pub use task_management::file_request_tasks::{
+    PendingPull, PullRequestResult, RejectionReason, cancel_pending, claim_by_nonce,
+    start_pull_request,
+};
 
 pub use fs_listener::FsListener;
 

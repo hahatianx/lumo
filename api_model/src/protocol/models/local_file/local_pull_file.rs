@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PullFileError {
     FileOutdated = 400,
+    FileInvalid = 401,
     AccessDenied = 403,
     FileNotFound = 404,
     InternalError = 500,
