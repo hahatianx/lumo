@@ -3,7 +3,9 @@ mod udp_listener;
 mod udp_sender;
 pub use udp_sender::NetworkSender;
 mod tcp_listener;
+pub use tcp_listener::ListenerHandle;
 mod tcp_sender;
+pub use tcp_sender::TcpConn;
 mod util;
 
 use crate::core::tasks::task_queue::TaskQueue;
@@ -18,6 +20,9 @@ pub struct NetworkSetup {
 
     // pub listener: listener::UdpListener,
     pub listener_handle: udp_listener::ListenerHandle,
+
+    // pub tcp_sender: tcp_sender::TcpConn,
+    // pub tcp_listener: tcp_listener::ListenerHandle,
 }
 
 /// Initiate network connections and other setup tasks.
@@ -49,6 +54,8 @@ pub async fn init_network(task_queue: &TaskQueue) -> Result<NetworkSetup> {
     Ok(NetworkSetup {
         sender: udp_sender,
         listener_handle: udp_join_handle,
+        // tcp_sender,
+        // tcp_listener: tcp_listener::TcpListener::bind().await?,
     })
 }
 

@@ -10,7 +10,7 @@ pub async fn local_pull_file(request: &LocalPullFileRequest) -> Result<LocalPull
     let file_path = request.path.clone();
     let expected_checksum = request.expected_checksum;
 
-    let result = match start_pull_request(&file_path, expected_checksum).await {
+    let result = match start_pull_request(&file_path, expected_checksum.into()).await {
         Ok(PullRequestResult::Accept(nonce)) => LocalPullFileResult::Accept(nonce),
         Ok(PullRequestResult::Reject(reason)) => match reason {
             RejectionReason::PathNotFound => {

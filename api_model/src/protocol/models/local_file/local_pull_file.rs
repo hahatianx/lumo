@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+type Checksum = u64;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PullFileError {
     FileOutdated = 400,
@@ -18,7 +20,7 @@ pub enum LocalPullFileResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalPullFileRequest {
     pub path: String,
-    pub expected_checksum: Option<u64>,
+    pub expected_checksum: Option<Checksum>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

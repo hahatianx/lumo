@@ -1,4 +1,5 @@
 use crate::core::PEER_TABLE;
+use crate::core::tasks::handlers::IGNORE_SELF;
 use crate::core::tasks::{AsyncHandleable, NetworkHandleable};
 use crate::core::topology::Peer;
 use crate::err::Result;
@@ -21,10 +22,7 @@ impl AsyncHandleable for HelloMessage {
             LOGGER.debug("Received a hello message requiring response.");
             let sender = get_msg_sender().await?;
             let resp = HelloMessage::from_env(HelloMode::empty())?;
-            let sock_addr = SocketAddr::V4(SocketAddrV4::new(
-                self.from_ip.parse().unwrap(),
-                self.from_port,
-            ));
+            let sock_addr = format!("{}:{}", self.from_ip, self.from_port).parse::<SocketAddr>()?;
             LOGGER.debug(format!("Response HelloMessage: {:?}", &resp));
             let b = Bytes::from(resp.serialize());
             sender.send(sock_addr, b).await?;
@@ -35,13 +33,7 @@ impl AsyncHandleable for HelloMessage {
 
 impl NetworkHandleable for HelloMessage {
     fn should_ignore_by_sockaddr_peer(&self, peer: &SocketAddr) -> bool {
-        if peer.ip().is_loopback() {
-            return true;
-        }
-        if peer.ip() == ENV_VAR.get().unwrap().get_ip_addr() {
-            return true;
-        }
-        false
+        IGNORE_SELF(peer)
     }
 }
 

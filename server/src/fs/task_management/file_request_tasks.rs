@@ -10,11 +10,16 @@ use crate::core::tasks::{ClaimableJobHandle, launch_claimable_job};
 use crate::err::Result;
 use crate::fs::fs_lock;
 use crate::global_var::{ENV_VAR, LOGGER, get_task_queue_sender};
+use crate::types::Expected;
 use rand::random;
 use std::collections::HashMap;
+use std::fmt::{Debug, Display};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use tokio::sync::RwLock;
+
+type Checksum = u64;
+type Nonce = u64;
 
 /// Information we keep for a pending pull (awaiting a remote downloader to take over)
 pub struct PendingPull {
@@ -26,7 +31,7 @@ pub struct PendingPull {
 }
 
 /// Global registry nonce -> PendingPull
-static PENDING_PULLS: LazyLock<RwLock<HashMap<u64, PendingPull>>> =
+static PENDING_PULLS: LazyLock<RwLock<HashMap<Nonce, PendingPull>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 pub enum RejectionReason {
@@ -35,8 +40,24 @@ pub enum RejectionReason {
     FileChecksumMismatch,
 }
 
+impl Debug for RejectionReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RejectionReason::PathNotFound => write!(f, "PathNotFound"),
+            RejectionReason::PathNotFile => write!(f, "PathNotFile"),
+            RejectionReason::FileChecksumMismatch => write!(f, "FileChecksumMismatch"),
+        }
+    }
+}
+
+impl Display for RejectionReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 pub enum PullRequestResult {
-    Accept(u64),
+    Accept(Nonce),
     Reject(RejectionReason),
 }
 
@@ -44,7 +65,7 @@ pub enum PullRequestResult {
 /// Returns (nonce, temp_path) on success.
 pub async fn start_pull_request(
     path_str: &str,
-    expected_checksum: Option<u64>,
+    expected_checksum: Expected<Checksum>,
 ) -> Result<PullRequestResult> {
     // Resolve and validate source path
     let base = PathBuf::from(ENV_VAR.get().unwrap().get_working_dir());
@@ -103,7 +124,7 @@ pub async fn start_pull_request(
         checksum
     };
 
-    if expected_checksum.is_some() && found_checksum != expected_checksum.unwrap() {
+    if expected_checksum.not_match_expected(&found_checksum) {
         return Ok(PullRequestResult::Reject(
             RejectionReason::FileChecksumMismatch,
         ));
@@ -128,6 +149,7 @@ pub async fn start_pull_request(
                     e
                 ));
             }
+            cancel_pending(nonce).await;
             Ok(())
         }
     };
@@ -156,12 +178,16 @@ pub async fn start_pull_request(
 
 /// Claim a pending transfer by its nonce. Returns the ClaimableJobHandle if present,
 /// and removes the entry from the registry. The caller can then call `take_over()` on the handle.
-pub async fn claim_by_nonce(nonce: u64) -> Option<PendingPull> {
+async fn claim_by_nonce(nonce: Nonce) -> Option<PendingPull> {
     PENDING_PULLS.write().await.remove(&nonce)
 }
 
 /// Cancel a pending transfer and remove temp file if present.
-pub async fn cancel_pending(nonce: u64) {
+async fn cancel_pending(nonce: Nonce) {
+    LOGGER.debug(format!(
+        "Removing pending pull task for nonce {} from pending pulls map, result is ignored",
+        nonce
+    ));
     let _ = PENDING_PULLS.write().await.remove(&nonce);
 }
 

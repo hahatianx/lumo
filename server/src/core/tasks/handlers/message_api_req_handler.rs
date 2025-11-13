@@ -1,6 +1,7 @@
+use crate::core::tasks::handlers::IGNORE_PEER;
 use crate::core::tasks::{AsyncHandleable, NetworkHandleable};
 use crate::err::Result;
-use crate::global_var::{ENV_VAR, LOGGER, get_msg_sender};
+use crate::global_var::{LOGGER, get_msg_sender};
 use crate::interface::handlers::list_peers::list_peers;
 use crate::interface::handlers::list_tasks::list_tasks;
 use crate::interface::handlers::local_pull_file::local_pull_file;
@@ -48,13 +49,7 @@ impl AsyncHandleable for ApiRequestMessage {
 impl NetworkHandleable for ApiRequestMessage {
     // Only accept requests from local machine
     fn should_ignore_by_sockaddr_peer(&self, peer: &std::net::SocketAddr) -> bool {
-        if peer.ip().is_loopback() {
-            return false;
-        }
-        if peer.ip() == ENV_VAR.get().unwrap().get_ip_addr() {
-            return false;
-        }
-        true
+        IGNORE_PEER(peer)
     }
 }
 

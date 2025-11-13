@@ -18,6 +18,7 @@ mod fs;
 mod global_var;
 mod interface;
 mod network;
+pub mod types;
 mod utilities;
 
 fn print_version_and_exit() -> ! {

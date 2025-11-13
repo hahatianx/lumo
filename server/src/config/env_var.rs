@@ -39,6 +39,8 @@ pub struct AppConfig {
 #[derive(Debug)]
 pub struct StaticAppConfig {
     working_dir: String,
+
+    pull_task_validity_in_sec: u64,
 }
 
 impl AppConfig {
@@ -88,6 +90,7 @@ impl EnvVar {
             })),
             static_app_config: StaticAppConfig {
                 working_dir: expand_tilde(&config.app_config.working_dir),
+                pull_task_validity_in_sec: 10,
             },
         })
     }
@@ -122,6 +125,10 @@ impl EnvVar {
 
     pub fn get_public_key_location(&self) -> String {
         self.identity.key_spec.public_key_location.clone()
+    }
+
+    pub fn get_pull_task_validity_in_sec(&self) -> u64 {
+        self.static_app_config.pull_task_validity_in_sec
     }
 }
 

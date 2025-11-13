@@ -1,9 +1,13 @@
 use crate::err::Result;
 use crate::global_var::ENV_VAR;
+use crate::utilities::crypto;
 use aes::Aes256;
+use bincode::config;
 use bytes::Bytes;
 use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use cbc::{Decryptor, Encryptor};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
@@ -66,6 +70,46 @@ pub fn decrypt(cipher: Bytes, iv: &[u8]) -> Result<Bytes> {
         })?;
 
     Ok(Bytes::copy_from_slice(out))
+}
+
+pub fn to_encryption<T, F>(data: &T, generate_iv: F) -> Result<Vec<u8>>
+where
+    T: Serialize,
+    F: Fn() -> Result<[u8; 16]>,
+{
+    // Serialize self using bincode v2 serde API
+    let cfg = config::standard();
+    let raw_bytes = bincode::serde::encode_to_vec(data, cfg)?;
+
+    let iv = generate_iv()?;
+
+    // Encrypt the serialized payload using AES-256-CBC (PKCS7)
+    let encrypted = encrypt(Bytes::from(raw_bytes), &iv)?;
+
+    // Prepend IV in clear so the receiver can decrypt
+    let mut out: Vec<u8> = Vec::with_capacity(16 + encrypted.len());
+    out.extend_from_slice(&iv);
+    out.extend_from_slice(&encrypted);
+    Ok(out)
+}
+
+pub fn from_encryption<T>(ciphertext: Box<[u8]>) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    if ciphertext.len() < 16 {
+        return Err("Incorrect cipher: IV too short".into());
+    }
+    let iv: [u8; 16] = ciphertext[..16]
+        .try_into()
+        .map_err(|_| "Incorrect cipher: IV too short")?;
+
+    let decrypted = crypto::decrypt(Bytes::from(ciphertext[16..].to_vec()), &iv)?;
+
+    let raw_bytes = decrypted.to_vec();
+    let (message, _) = bincode::serde::decode_from_slice(&raw_bytes, config::standard())?;
+
+    Ok(message)
 }
 
 #[cfg(test)]

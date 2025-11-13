@@ -7,6 +7,7 @@ pub mod global_index;
 pub mod global_var;
 pub mod interface;
 pub mod network;
+pub mod types;
 pub mod utilities;
 
 // Re-export commonly used items if needed by external crates/tests
