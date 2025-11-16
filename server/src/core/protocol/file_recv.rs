@@ -13,7 +13,7 @@ use tokio::io::AsyncWriteExt;
 
 type Nonce = u64;
 type Checksum = u64;
-struct FileRecvTracker {
+pub struct FileRecvTracker {
     nonce: Nonce,
     expected_checksum: Expected<Checksum>,
 
@@ -48,7 +48,12 @@ impl FileRecvTracker {
         Ok(ack)
     }
 
-    async fn read_to_file(&self, conn: TcpConn, file: &mut File, total_size: u64) -> Result<u64> {
+    async fn download_to_file(
+        &self,
+        conn: TcpConn,
+        file: &mut File,
+        total_size: u64,
+    ) -> Result<u64> {
         LOGGER.info(format!(
             "Starting file receive: nonce={}, size={} bytes -> {}",
             self.nonce,
@@ -95,7 +100,7 @@ impl FileRecvTracker {
                 FileSyncError::AbortedByPeer
             })?;
 
-        self.read_to_file(conn, &mut file, ack.file_size())
+        self.download_to_file(conn, &mut file, ack.file_size())
             .await
             .map_err(|e| {
                 LOGGER.error(format!("Failed to download file: {:?}", e));

@@ -20,7 +20,7 @@ pub struct PendingFileDownloadTask {
     pub to_checksum: Expected<Checksum>,
 
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub handle: ClaimableJobHandle,
+    pub handle: Option<ClaimableJobHandle>,
 }
 
 impl PendingFileDownloadTask {
@@ -37,12 +37,12 @@ impl PendingFileDownloadTask {
             from_checksum,
             to_checksum,
             created_at: chrono::Utc::now(),
-            handle,
+            handle: Some(handle),
         }
     }
 }
 
-static PENDING_DOWNLOADS: LazyLock<RwLock<HashMap<u64, PendingFileDownloadTask>>> =
+static PENDING_DOWNLOADS: LazyLock<RwLock<HashMap<Challenge, PendingFileDownloadTask>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 async fn cancel_pending(challenge: Challenge) {
@@ -57,17 +57,19 @@ async fn claim_by_nonce(challenge: Challenge) -> Option<PendingFileDownloadTask>
     PENDING_DOWNLOADS.write().await.remove(&challenge)
 }
 
+pub async fn claim_pending_download(challenge: Challenge) -> Option<PendingFileDownloadTask> {
+    claim_by_nonce(challenge).await
+}
+
 async fn insert_download_task(task: PendingFileDownloadTask) {
     PENDING_DOWNLOADS.write().await.insert(task.challenge, task);
 }
-
-pub struct FileDownloadChallenge(Challenge);
 
 pub async fn start_file_download_task<P: AsRef<Path>>(
     path: P,
     from_checksum: Expected<Checksum>,
     to_checksum: Expected<Checksum>,
-) -> Result<FileDownloadChallenge> {
+) -> Result<Challenge> {
     // Make sure the challenge is not 0, 0 is reserved for bad requests, and the server will not respond to challenges with 0.
     let challenge = rand::rng().random_range(1..u64::MAX);
 
@@ -110,5 +112,5 @@ pub async fn start_file_download_task<P: AsRef<Path>>(
         challenge
     ));
 
-    Ok(FileDownloadChallenge(challenge))
+    Ok(challenge)
 }

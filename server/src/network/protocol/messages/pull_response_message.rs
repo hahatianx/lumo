@@ -1,15 +1,17 @@
 use crate::err::Result;
+use crate::global_var::ENV_VAR;
 use crate::utilities::crypto::{from_encryption, to_encryption};
 use api_model::protocol::protocol::Protocol;
 use api_model::protocol::token::Token;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use std::fmt::{Debug, Display};
 use std::time::SystemTime;
 
 type Nonce = u64;
 type Challenge = u64;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum PullRejectionReason {
     FileOutdated = 400,
     FileInvalid = 401,
@@ -18,7 +20,25 @@ pub enum PullRejectionReason {
     InternalError = 500,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl Debug for PullRejectionReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PullRejectionReason::FileOutdated => write!(f, "400: FileOutdated"),
+            PullRejectionReason::FileInvalid => write!(f, "400: FileInvalid"),
+            PullRejectionReason::AccessDenied => write!(f, "403: AccessDenied"),
+            PullRejectionReason::FileNotFound => write!(f, "404: FileNotFound"),
+            PullRejectionReason::InternalError => write!(f, "500: InternalError"),
+        }
+    }
+}
+
+impl Display for PullRejectionReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum PullDecision {
     // TODO: distinguish two u64s nonce and challenge
     Accept(Challenge, Nonce),
@@ -64,6 +84,12 @@ impl PullResponse {
     pub fn from_encryption(ciphertext: Box<[u8]>) -> Result<Self> {
         from_encryption(ciphertext)
     }
+
+    pub fn timestamp_valid(&self) -> bool {
+        let now = SystemTime::now();
+        let diff = now.duration_since(self.timestamp).unwrap();
+        diff.as_secs() < ENV_VAR.get().unwrap().get_pull_task_validity_in_sec()
+    }
 }
 
 pub struct PullResponseMessage {
@@ -82,6 +108,10 @@ impl PullResponseMessage {
             });
         }
         Err("Failed to generate pull response because env_var not found.".into())
+    }
+
+    pub fn get_response(&self) -> Result<PullResponse> {
+        PullResponse::from_encryption(self.response.clone().to_vec().into_boxed_slice())
     }
 }
 

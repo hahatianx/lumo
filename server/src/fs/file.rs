@@ -1,5 +1,5 @@
 use crate::err::Result;
-use crate::fs::fs_lock::RwLock;
+use crate::fs::fs_lock::{GuardAccess, RwLock};
 use crate::fs::util::round_to_fat32;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -163,30 +163,7 @@ impl LumoFile {
         let _guard = RwLock::new(&self.path).read().await?;
 
         // Compute checksum under exclusive lock; single metadata read is sufficient.
-        let (size, mtime, checksum) = {
-            // Open file read-only
-            let mut file = fs::File::open(&self.path)
-                .await
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-
-            let (size, mtime) = get_file_sz_and_mtime(&self.path)?;
-
-            // Stream the file into the hasher
-            let mut hasher = Xxh64::new(0);
-            let mut buf = vec![0u8; 64 * 1024];
-            loop {
-                let n = file
-                    .read(&mut buf)
-                    .await
-                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-                if n == 0 {
-                    break;
-                }
-                hasher.update(&buf[..n]);
-            }
-            let checksum = hasher.digest();
-            (size, mtime, checksum)
-        };
+        let (size, mtime, checksum, _guard) = get_file_checksum(&self.path, _guard).await?;
 
         // Update cached fingerprint to reflect the observed metadata when checksum was computed.
         self.fingerprint
@@ -196,6 +173,36 @@ impl LumoFile {
 
         Ok(checksum)
     }
+}
+
+// to call this function, you need to acquire a read/write lock on the path
+pub async fn get_file_checksum<P: AsRef<Path>, G: GuardAccess>(
+    p: P,
+    _guard: G,
+) -> Result<(u64, SystemTime, u64, G)> {
+    let path = p.as_ref();
+    // Open file read-only
+    let mut file = fs::File::open(&path)
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+    let (size, mtime) = get_file_sz_and_mtime(&path)?;
+
+    // Stream the file into the hasher
+    let mut hasher = Xxh64::new(0);
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let checksum = hasher.digest();
+    Ok((size, mtime, checksum, _guard))
 }
 
 #[cfg(test)]

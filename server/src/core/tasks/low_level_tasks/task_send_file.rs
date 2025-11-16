@@ -10,13 +10,13 @@ use std::net::SocketAddr;
 use tokio::net::TcpStream;
 
 pub struct SendFileTask {
-    tcp_stream: TcpConn,
+    tcp_conn: TcpConn,
 }
 
 impl SendFileTask {
     pub fn new(stream: TcpStream, peer: SocketAddr) -> Self {
         Self {
-            tcp_stream: TcpConn::new(stream, peer),
+            tcp_conn: TcpConn::new(stream, peer),
         }
     }
 }
@@ -25,12 +25,12 @@ impl SendFileTask {
 impl AsyncHandleable for SendFileTask {
     async fn handle(&mut self) -> Result<()> {
         // 1. Read 1024 bytes and decrypt/deserialize into FileSync
-        let sync_bytes = self.tcp_stream.read_bytes(1024).await?;
+        let sync_bytes = self.tcp_conn.read_bytes(1024).await?;
         let sync =
             FileSync::from_encryption(sync_bytes.to_vec().into_boxed_slice()).map_err(|e| {
                 LOGGER.warn(format!(
                     "Failed to decrypt/deserialize FileSync from {}: {:?}",
-                    self.tcp_stream.peer_addr(),
+                    self.tcp_conn.peer_addr(),
                     e
                 ));
                 // Connection considered bad; stop handling.
@@ -44,7 +44,7 @@ impl AsyncHandleable for SendFileTask {
         if !sync.is_valid() {
             LOGGER.warn(format!(
                 "Received invalid/expired FileSync from {} for nonce {:x}",
-                self.tcp_stream.peer_addr(),
+                self.tcp_conn.peer_addr(),
                 sync.nonce()
             ));
             return Err(format!(
@@ -62,7 +62,7 @@ impl AsyncHandleable for SendFileTask {
                 LOGGER.warn(format!(
                     "Received FileSync for nonce {:x} from {} that is not pending",
                     nonce,
-                    self.tcp_stream.peer_addr()
+                    self.tcp_conn.peer_addr()
                 ));
                 return Err(
                     format!("The received FileSync is not pending. Request: {:?}", sync).into(),
@@ -84,7 +84,7 @@ impl AsyncHandleable for SendFileTask {
 
         // 5. Send the file using protocol helper
         let res =
-            file_send::send_file(nonce, pending_pull.temp_path.clone(), &mut self.tcp_stream).await;
+            file_send::send_file(nonce, pending_pull.temp_path.clone(), &mut self.tcp_conn).await;
 
         // 6. End the claimed job with proper status and log errors if any
         match res {
@@ -101,7 +101,7 @@ impl AsyncHandleable for SendFileTask {
                 LOGGER.warn(format!(
                     "File send failed for nonce {:x} to {}: {:?}",
                     nonce,
-                    self.tcp_stream.peer_addr(),
+                    self.tcp_conn.peer_addr(),
                     err
                 ));
                 if let Err(e) = callback(

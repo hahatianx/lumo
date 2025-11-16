@@ -1,6 +1,7 @@
 use crate::err::{Error, Result};
 use fs2::FileExt;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -14,6 +15,7 @@ use tokio::time::sleep;
 
 /// wrapped by a file lock OS call
 /// There must be at most one FileLockGuard towards each file in the system
+#[derive(Debug)]
 pub(crate) struct FileLockGuard {
     inner: File,
 }
@@ -65,6 +67,7 @@ pub(crate) async fn acquire_lock(path: &Path) -> Result<FileLockGuard> {
     .into())
 }
 
+#[derive(Debug)]
 struct InnerState {
     // Tracks active readers in this process
     read_count: AtomicUsize,
@@ -73,6 +76,7 @@ struct InnerState {
 }
 
 // In-process per-path async RWLock registry with system-level exclusivity for the read phase
+#[derive(Debug)]
 struct PerPathState {
     rw: Arc<TokioRwLock<()>>,
     // Serializes initialization of the first reader (acquiring system lock)
@@ -204,6 +208,7 @@ impl RwLock {
 }
 
 /// Guard returned by RwLock::read()
+#[derive(Debug)]
 pub struct ReadGuard {
     _guard: OwnedRwLockReadGuard<()>,
     state: Arc<PerPathState>,
@@ -222,10 +227,16 @@ impl Drop for ReadGuard {
 }
 
 /// Guard returned by RwLock::write()
+#[derive(Debug)]
 pub struct WriteGuard {
     _guard: OwnedRwLockWriteGuard<()>,
     _file_lock: FileLockGuard,
 }
+
+pub trait GuardAccess: Send + Debug {}
+
+impl GuardAccess for ReadGuard {}
+impl GuardAccess for WriteGuard {}
 
 #[cfg(test)]
 mod tests {
