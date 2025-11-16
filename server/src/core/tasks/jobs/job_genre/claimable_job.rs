@@ -164,6 +164,7 @@ pub struct ClaimableJobHandle {
     take_over_indicator: tokio::sync::oneshot::Sender<()>,
 }
 
+#[derive(Debug)]
 pub enum ClaimableJobTakeoverError {
     JobTimeOut,
     JobDropped,

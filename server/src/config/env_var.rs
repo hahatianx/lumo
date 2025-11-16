@@ -99,6 +99,10 @@ impl EnvVar {
         &self.static_app_config.working_dir
     }
 
+    pub fn get_temp_downloads_dir(&self) -> String {
+        format!("{}/.disc/tmp_downloads", self.get_working_dir())
+    }
+
     pub fn get_conn_token(&self) -> &str {
         &self.connection.conn_token
     }

@@ -3,11 +3,11 @@ mod udp_listener;
 mod udp_sender;
 pub use udp_sender::NetworkSender;
 mod tcp_listener;
-pub use tcp_listener::ListenerHandle;
 mod tcp_sender;
 pub use tcp_sender::TcpConn;
 mod util;
 
+use crate::core::tasks::SendFileTask;
 use crate::core::tasks::task_queue::TaskQueue;
 use crate::err::Result;
 use crate::global_var::LOGGER;
@@ -20,9 +20,7 @@ pub struct NetworkSetup {
 
     // pub listener: listener::UdpListener,
     pub listener_handle: udp_listener::ListenerHandle,
-
-    // pub tcp_sender: tcp_sender::TcpConn,
-    // pub tcp_listener: tcp_listener::ListenerHandle,
+    pub tcp_listener_handle: tcp_listener::ListenerHandle,
 }
 
 /// Initiate network connections and other setup tasks.
@@ -50,17 +48,24 @@ pub async fn init_network(task_queue: &TaskQueue) -> Result<NetworkSetup> {
             ));
         }
     });
+    let tcp_task_queue_sender = task_queue.sender();
+    let tcp_listener = tcp_listener::TcpListener::bind().await?;
+    let tcp_join_handle = tcp_listener.into_task(move |stream, peer| {
+        if let Err(e) = tcp_task_queue_sender.try_send(Box::new(SendFileTask::new(stream, peer))) {
+            LOGGER.error(format!("Unable to send message to task queue: {:?}", e));
+        }
+    });
 
     Ok(NetworkSetup {
         sender: udp_sender,
         listener_handle: udp_join_handle,
-        // tcp_sender,
-        // tcp_listener: tcp_listener::TcpListener::bind().await?,
+        tcp_listener_handle: tcp_join_handle,
     })
 }
 
 pub async fn terminate_network(setup: NetworkSetup) -> Result<()> {
     let _ = setup.sender.shutdown().await;
     let _ = setup.listener_handle.shutdown().await?;
+    let _ = setup.tcp_listener_handle.shutdown().await?;
     Ok(())
 }

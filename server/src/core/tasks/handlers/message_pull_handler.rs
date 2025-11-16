@@ -41,6 +41,10 @@ impl PullMessage {
                                 request.get_challenge(),
                                 protocol::messages::PullRejectionReason::FileInvalid,
                             ),
+                            RejectionReason::SystemError => PullDecision::Reject(
+                                request.get_challenge(),
+                                protocol::messages::PullRejectionReason::InternalError,
+                            ),
                         }
                     }
                 }

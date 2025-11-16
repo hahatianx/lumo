@@ -11,6 +11,7 @@ use crate::err::Result;
 use crate::fs::fs_lock;
 use crate::global_var::{ENV_VAR, LOGGER, get_task_queue_sender};
 use crate::types::Expected;
+use crate::utilities::temp_dir::TmpDirGuard;
 use rand::random;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
@@ -23,11 +24,136 @@ type Nonce = u64;
 
 /// Information we keep for a pending pull (awaiting a remote downloader to take over)
 pub struct PendingPull {
-    pub nonce: u64,
+    pub nonce: Nonce,
     pub original_path: PathBuf,
-    pub temp_path: PathBuf,
+    pub temp_path: TmpDirGuard,
+    pub checksum: Checksum,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub handle: ClaimableJobHandle,
+    pub handle: Option<ClaimableJobHandle>,
+}
+
+impl PendingPull {
+    async fn create_claimable_job(nonce: Nonce, file_name: &PathBuf) -> Result<ClaimableJobHandle> {
+        // Launch a claimable job representing this pending transfer
+        let q_sender = get_task_queue_sender().await?;
+        let job_name = format!("pull:{}", file_name.to_string_lossy());
+        let summary = format!(
+            "Pending file transfer for {} (nonce={:x})",
+            file_name.to_string_lossy(),
+            nonce
+        );
+        let cleanup = move || async move {
+            cancel_pending(nonce).await;
+            Ok(())
+        };
+        Ok(launch_claimable_job(&job_name, &summary, cleanup, 120, q_sender).await?)
+    }
+    pub async fn validate_and_new<P>(
+        nonce: Nonce,
+        source_path: P,
+        expected_checksum: Expected<Checksum>,
+    ) -> std::result::Result<Self, RejectionReason>
+    where
+        P: AsRef<Path>,
+    {
+        ////  TODO: resolve dangling tmp_dir issue here.
+        let original_path: PathBuf = source_path.as_ref().into();
+        // Prepare temp destination in .disc/tmp_downloads
+        let base_download_dir = PathBuf::from(ENV_VAR.get().unwrap().get_temp_downloads_dir());
+        let tmp_dir = base_download_dir.join(format!("send-{:x}", nonce));
+        tokio::fs::create_dir_all(&tmp_dir).await.map_err(|e| {
+            LOGGER.error(format!(
+                "Failed to create temp dir {}: {:?}",
+                tmp_dir.display(),
+                e
+            ));
+            RejectionReason::PathNotFound
+        })?; // best-effort
+
+        let tmp_dest = tmp_dir.join(format!("{}.{}", original_path.to_string_lossy(), nonce));
+        // Guard to ensure temp dir is removed if we error out before constructing PendingPull
+        let tmp_dir_guard: TmpDirGuard = tmp_dir.into();
+
+        // Copy the file to temp for exclusive transfer
+        let found_checksum = {
+            LOGGER.debug(format!(
+                "Copying file '{}' to temp location '{}'",
+                original_path.display(),
+                tmp_dest.display()
+            ));
+
+            if let Err(_) = fs_lock::RwLock::new(&original_path).write().await {
+                return Err(RejectionReason::PathNotFound);
+            }
+            LOGGER.debug(format!("read guard fetched {}", original_path.display()));
+
+            let lumo_file = crate::fs::file::LumoFile::new(original_path.clone())
+                .await
+                .map_err(|e| {
+                    LOGGER.error(format!(
+                        "Failed to create LumoFile for {}: {:?}",
+                        original_path.display(),
+                        e
+                    ));
+                    RejectionReason::PathNotFile
+                })?;
+            let checksum = lumo_file.get_checksum().await.map_err(|e| {
+                LOGGER.error(format!(
+                    "Failed to get checksum for {}: {:?}",
+                    original_path.display(),
+                    e
+                ));
+                RejectionReason::PathNotFile
+            })?;
+            tokio::fs::copy(&original_path, &tmp_dest)
+                .await
+                .map_err(|e| {
+                    LOGGER.error(format!("Failed to copy file to temp location: {:?}", e));
+                    RejectionReason::PathNotFile
+                })?;
+            LOGGER.debug(format!(
+                "Copied file '{}' to temp location '{}', file checksum {}",
+                original_path.display(),
+                tmp_dest.display(),
+                checksum
+            ));
+
+            checksum
+        };
+
+        if expected_checksum.not_match_expected(&found_checksum) {
+            return Err(RejectionReason::FileChecksumMismatch);
+        }
+
+        let handle = Self::create_claimable_job(nonce, &original_path)
+            .await
+            .map_err(|e| {
+                LOGGER.error(format!(
+                    "Failed to create claimable job for {}: {:?}",
+                    original_path.display(),
+                    e
+                ));
+                RejectionReason::SystemError
+            })?;
+
+        Ok(Self {
+            nonce,
+            original_path,
+            temp_path: tmp_dir_guard,
+            checksum: found_checksum,
+            created_at: chrono::Utc::now(),
+            handle: Some(handle),
+        })
+    }
+}
+
+impl Drop for PendingPull {
+    fn drop(&mut self) {
+        LOGGER.debug(format!(
+            "PendingPull dropped for nonce {:x}, temp_path: {:?}",
+            self.nonce, self.temp_path
+        ));
+    }
 }
 
 /// Global registry nonce -> PendingPull
@@ -38,6 +164,7 @@ pub enum RejectionReason {
     PathNotFound,
     PathNotFile,
     FileChecksumMismatch,
+    SystemError,
 }
 
 impl Debug for RejectionReason {
@@ -46,6 +173,7 @@ impl Debug for RejectionReason {
             RejectionReason::PathNotFound => write!(f, "PathNotFound"),
             RejectionReason::PathNotFile => write!(f, "PathNotFile"),
             RejectionReason::FileChecksumMismatch => write!(f, "FileChecksumMismatch"),
+            RejectionReason::SystemError => write!(f, "SystemError"),
         }
     }
 }
@@ -86,100 +214,25 @@ pub async fn start_pull_request(
         .file_name()
         .ok_or_else(|| format!("Invalid file name for {}", src.display()))?;
 
-    // Prepare temp destination in .disc/tmp_downloads
-    let tmp_dir = base
-        .join(".disc")
-        .join("tmp_downloads")
-        .join(format!("{:x}", nonce));
-    tokio::fs::create_dir_all(&tmp_dir).await?; // best-effort
-
-    let tmp_dest = tmp_dir.join(format!("{}.{}", file_name.to_string_lossy(), nonce));
-
-    // Copy the file to temp for exclusive transfer
-    let found_checksum = {
-        LOGGER.debug(format!(
-            "Copying file '{}' to temp location '{}'",
-            src.display(),
-            tmp_dest.display()
-        ));
-
-        match fs_lock::RwLock::new(&src).read().await {
-            Ok(_) => {}
-            Err(e) => {
-                return Ok(PullRequestResult::Reject(RejectionReason::PathNotFound));
-            }
+    match PendingPull::validate_and_new(nonce, file_name, expected_checksum).await {
+        Ok(pending) => {
+            PENDING_PULLS.write().await.insert(nonce, pending);
+            Ok(PullRequestResult::Accept(nonce))
         }
-        LOGGER.debug(format!("read guard fetched {}", src.display()));
-
-        let lumo_file = crate::fs::file::LumoFile::new(src.clone()).await?;
-        let checksum = lumo_file.get_checksum().await?;
-        tokio::fs::copy(&src, &tmp_dest).await?;
-        LOGGER.debug(format!(
-            "Copied file '{}' to temp location '{}', file checksum {}",
-            src.display(),
-            tmp_dest.display(),
-            checksum
-        ));
-
-        checksum
-    };
-
-    if expected_checksum.not_match_expected(&found_checksum) {
-        return Ok(PullRequestResult::Reject(
-            RejectionReason::FileChecksumMismatch,
-        ));
+        Err(e) => Ok(PullRequestResult::Reject(e)),
     }
-
-    // Launch a claimable job representing this pending transfer
-    let q_sender = get_task_queue_sender().await?;
-    let job_name = format!("pull:{}", file_name.to_string_lossy());
-    let summary = format!(
-        "Pending file transfer for {} (nonce={:x})",
-        file_name.to_string_lossy(),
-        nonce
-    );
-    let cleanup = move || {
-        let tmp_dir_for_cleanup = tmp_dir.clone();
-        async move {
-            // If the job times out without being claimed, try to remove the temp file
-            if let Err(e) = tokio::fs::remove_dir_all(&tmp_dir_for_cleanup).await {
-                LOGGER.error(format!(
-                    "Failed to remove temp dir {} (err: {:?})",
-                    &tmp_dir_for_cleanup.display(),
-                    e
-                ));
-            }
-            cancel_pending(nonce).await;
-            Ok(())
-        }
-    };
-
-    let handle = launch_claimable_job(&job_name, &summary, cleanup, 120, q_sender).await?;
-
-    // Insert into registry
-    let pending = PendingPull {
-        nonce,
-        original_path: src.clone(),
-        temp_path: tmp_dest.clone(),
-        created_at: chrono::Utc::now(),
-        handle,
-    };
-    PENDING_PULLS.write().await.insert(nonce, pending);
-
-    LOGGER.info(format!(
-        "Prepared file '{}' for pull, moved to '{}' with nonce {:x}",
-        src.display(),
-        tmp_dest.display(),
-        nonce
-    ));
-
-    Ok(PullRequestResult::Accept(nonce))
 }
 
 /// Claim a pending transfer by its nonce. Returns the ClaimableJobHandle if present,
 /// and removes the entry from the registry. The caller can then call `take_over()` on the handle.
 async fn claim_by_nonce(nonce: Nonce) -> Option<PendingPull> {
     PENDING_PULLS.write().await.remove(&nonce)
+}
+
+/// Public wrapper to claim a pending pull by nonce.
+/// Returns the PendingPull if present and removes it from the registry.
+pub async fn claim_pending_pull(nonce: Nonce) -> Option<PendingPull> {
+    claim_by_nonce(nonce).await
 }
 
 /// Cancel a pending transfer and remove temp file if present.

@@ -20,6 +20,9 @@ pub async fn local_pull_file(request: &LocalPullFileRequest) -> Result<LocalPull
                 LocalPullFileResult::Reject(PullFileError::FileOutdated)
             }
             RejectionReason::PathNotFile => LocalPullFileResult::Reject(PullFileError::FileInvalid),
+            RejectionReason::SystemError => {
+                LocalPullFileResult::Reject(PullFileError::InternalError)
+            }
         },
         Err(e) => LocalPullFileResult::Reject(PullFileError::InternalError),
     };

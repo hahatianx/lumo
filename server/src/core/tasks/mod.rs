@@ -7,7 +7,9 @@ use crate::core::tasks::jobs::{
     job_fs_inactive_cleanup, job_fs_stale_rescan, job_peer_table_anti_entropy, launch_oneshot_job,
     launch_periodic_job,
 };
+pub use crate::core::tasks::low_level_tasks::SendFileTask;
 pub use job_summary::JOB_TABLE;
+pub use job_summary::JobStatus;
 pub use job_summary::JobSummary;
 
 mod jobs;

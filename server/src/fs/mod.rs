@@ -9,7 +9,7 @@ mod fs_lock;
 mod fs_op;
 mod task_management;
 pub use task_management::file_request_tasks::{
-    PendingPull, PullRequestResult, RejectionReason, start_pull_request,
+    PendingPull, PullRequestResult, RejectionReason, claim_pending_pull, start_pull_request,
 };
 
 pub use fs_listener::FsListener;

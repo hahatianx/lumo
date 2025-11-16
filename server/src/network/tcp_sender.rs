@@ -3,7 +3,7 @@ use crate::global_var::LOGGER;
 use bytes::Bytes;
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio::time::timeout;
 
@@ -11,18 +11,21 @@ use tokio::time::timeout;
 /// a minimal lifecycle: connect, send bytes, and graceful shutdown.
 #[derive(Debug)]
 pub struct TcpConn {
-    stream: TokioTcpStream,
+    pub stream: TokioTcpStream,
     peer: SocketAddr,
     /// Optional connect timeout
     connect_timeout: Duration,
     /// Optional write timeout
     write_timeout: Duration,
+    /// Optional read timeout
+    read_timeout: Duration,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct TcpConnConfig {
     pub connect_timeout: Duration,
     pub write_timeout: Duration,
+    pub read_timeout: Duration,
 }
 
 impl Default for TcpConnConfig {
@@ -30,11 +33,22 @@ impl Default for TcpConnConfig {
         Self {
             connect_timeout: Duration::from_secs(5),
             write_timeout: Duration::from_secs(5),
+            read_timeout: Duration::from_secs(5),
         }
     }
 }
 
 impl TcpConn {
+    pub fn new(stream: TokioTcpStream, peer: SocketAddr) -> Self {
+        let cfg = TcpConnConfig::default();
+        Self {
+            stream,
+            peer,
+            connect_timeout: cfg.connect_timeout,
+            write_timeout: cfg.write_timeout,
+            read_timeout: cfg.read_timeout,
+        }
+    }
     /// Connect to the given socket address using default timeouts.
     pub async fn connect(addr: SocketAddr) -> Result<Self> {
         Self::connect_with_config(addr, TcpConnConfig::default()).await
@@ -64,6 +78,7 @@ impl TcpConn {
             peer: addr,
             connect_timeout: cfg.connect_timeout,
             write_timeout: cfg.write_timeout,
+            read_timeout: cfg.read_timeout,
         })
     }
 
@@ -75,6 +90,14 @@ impl TcpConn {
     /// Return the local address, if available.
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.stream.local_addr()
+    }
+
+    pub fn get_read_timeout(&self) -> Duration {
+        self.read_timeout
+    }
+
+    pub fn get_write_timeout(&self) -> Duration {
+        self.write_timeout
     }
 
     /// Send the entire buffer over the TCP stream. Honors write timeout if non-zero.
@@ -102,18 +125,41 @@ impl TcpConn {
         self.send_all(&bytes).await
     }
 
+    pub async fn read_bytes(&mut self, len: usize) -> Result<Bytes> {
+        if len == 0 {
+            return Ok(Bytes::new());
+        }
+        let mut buf = vec![0u8; len];
+        let mut read_total = 0usize;
+        while read_total < len {
+            let fut = self.stream.read(&mut buf[read_total..]);
+            let n = if self.read_timeout.is_zero() {
+                fut.await?
+            } else {
+                match timeout(self.read_timeout, fut).await {
+                    Ok(Ok(n)) => n,
+                    Ok(Err(e)) => return Err(e.into()),
+                    Err(_elapsed) => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "tcp read timeout",
+                        )
+                        .into());
+                    }
+                }
+            };
+            if n == 0 {
+                break;
+            }
+            read_total += n;
+        }
+        Ok(Bytes::from(buf))
+    }
+
     /// Gracefully shutdown the write half to signal EOF to the remote end.
     pub async fn shutdown(mut self) -> Result<()> {
         let _ = self.stream.shutdown().await; // ignore error; connection will drop anyway
         Ok(())
-    }
-}
-
-impl Drop for TcpConn {
-    fn drop(&mut self) {
-        // Best-effort: nothing async can be done here. Dropping the stream closes the socket.
-        // We keep a debug log to help trace lifecycles.
-        LOGGER.debug(format!("TcpConn to {} dropped", self.peer));
     }
 }
 
@@ -167,6 +213,7 @@ mod tests {
         let cfg = TcpConnConfig {
             connect_timeout: Duration::from_millis(50),
             write_timeout: Duration::from_millis(50),
+            read_timeout: Duration::from_millis(50),
         };
         let res = TcpConn::connect_with_config(addr, cfg).await;
         assert!(res.is_err(), "connect should likely fail or timeout");

@@ -27,7 +27,8 @@ pub struct PullRequest {
 
 impl PullRequest {
     pub fn new<T>(from_ip: String, path: String, checksum: T, challenge: u64) -> Self
-    where T: Into<Option<Checksum>>
+    where
+        T: Into<Option<Checksum>>,
     {
         Self {
             from_ip,
@@ -103,7 +104,8 @@ impl Debug for PullMessage {
 
 impl PullMessage {
     pub fn new<T>(path: &str, checksum: T, challenge: u64) -> Result<Self>
-    where T: Into<Option<Checksum>>
+    where
+        T: Into<Option<Checksum>>,
     {
         if let Some(ev) = ENV_VAR.get() {
             let from_ip = ev.get_ip_addr();
