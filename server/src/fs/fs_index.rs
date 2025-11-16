@@ -1,3 +1,79 @@
+//! File system index module
+//!
+//! This file defines the in-memory index and helpers used by the server to
+//! track files. Below is a quick reference of structs and their methods to
+//! help navigation. Visibility markers:
+//! - [pub] public
+//! - [crate] crate-private or module-internal
+//! - [priv] private helper
+//!
+//! Struct: FileEntry
+//! - [pub] new(file: LumoFile) -> Self
+//! - [priv] new_internal(path: PathBuf, last_writer: Option<String>) -> Self
+//! - [pub] with_last_writer(writer: impl Into<String>) -> Self
+//! - [pub] with_active(active: bool) -> Self
+//! - [pub] with_stale(stale: bool) -> Self
+//! - [priv] return_ver_error(op: &str, exp_ver: u64) -> Result<()>
+//! - [priv] bump_version(op: &str, exp_ver: u64) -> Result<u64>
+//! - [pub] set_active(from_ver: u64, active: bool) -> Result<u64>
+//! - [pub] set_stale(from_ver: u64, stale: bool) -> Result<u64>
+//! - [pub] mark_stale(from_ver: u64) -> Result<u64>
+//! - [pub] set_last_writer(from_ver: u64, writer: impl Into<String>) -> Result<u64>
+//! - [pub] needs_rescan() -> bool
+//!
+//! Struct: FileIndexInner
+//! - [priv] mtime_key(mtime: SystemTime) -> u64
+//! - [priv] contains_key<P: AsRef<Path>>(path: P) -> bool
+//! - [priv] insert_indices(path: &Path, size: u64, mtime: SystemTime)
+//! - [priv] remove_indices(path: &Path, size: u64, mtime: SystemTime)
+//! - [crate] debug() -> String (async)
+//!
+//! Struct: FileIndex
+//! Non-mutating/query APIs:
+//! - [pub] new() -> Self
+//! - [pub] len() -> usize (async)
+//! - [pub] with_entry<P, T>(path: P, f: impl FnOnce(&FileEntry) -> T) -> Option<T> (async)
+//! - [crate] list_paths() -> Vec<PathBuf> (async)
+//! - [crate] candidates_by_size(size: u64) -> Vec<PathBuf> (async)
+//! - [crate] candidates_by_size_mtime(size: u64, mtime: SystemTime) -> Vec<PathBuf> (async)
+//! - [pub] candidates_for(file: &LumoFile) -> Vec<PathBuf> (async)
+//! - [pub] debug() -> String (async)
+//!
+//! Mutating/management APIs (checked -> version-checked):
+//! - [crate] upsert(entry: FileEntry) (async)
+//! - [crate] refresh_on_checked(path, from_ver, entry) -> Result<()> (async)
+//! - [crate] remove_checked(path, from_ver) -> Result<bool> (async)
+//! - [crate] mark_stale_checked(path, from_ver) -> Result<()> (async)
+//! - [crate] activate_checked(path, from_ver) -> Result<()> (async)
+//! - [crate] deactivate_checked(path, from_ver) -> Result<()> (async)
+//! - [crate] set_last_writer_checked(path, from_ver, writer: String) -> Result<()> (async)
+//! - [crate] remove(path) -> bool (async)
+//! - [crate] activate(path) -> Result<()> (async)
+//! - [crate] deactivate(path) -> Result<()> (async)
+//! - [crate] mark_stale(path) -> Result<()> (async)
+//! - [crate] set_last_writer(path, writer: impl Into<String>) (async)
+//! - [crate] on_add(path, lf: LumoFile) -> Result<()> (async)
+//! - [crate] on_remove(path) -> Result<()> (async)
+//! - [crate] on_modify_content(path) -> Result<()> (async)
+//! - [crate] on_file_event(path, ek: notify::EventKind) -> Result<()> (async)
+//! - [crate] index_stale_rescan() -> Result<()> (async)
+//! - [crate] index_inactive_clean() -> Result<()> (async)
+//!
+//! Persistence helpers on FileIndex:
+//! - [crate] to_serialized() -> Result<SerializedFileIndex> (async)
+//! - [crate] from_serialized(serialized: SerializedFileIndex) -> Self (async)
+//! - [pub] init() -> Self (async)
+//! - [pub] dump_index(last_checksum: Option<u64>) -> Result<u64> (async)
+//!
+//! Structs for serialization (no inherent methods):
+//! - SerializedFileEntry { path: PathBuf, last_writer: Option<String> }
+//! - SerializedFileIndex { entry_list: Vec<SerializedFileEntry> }
+//!
+//! Test helpers (scoped in this file):
+//! - TempDirGuard: new(prefix: &str) -> Self; path(&self) -> &Path; Drop
+//! - TempDirGuard2: new(prefix: &str) -> Self; path(&self) -> &Path; Drop
+//! - TempDirGuard3: new(prefix: &str) -> Self; path(&self) -> &Path; Drop
+
 use crate::err::Result;
 use crate::fs::LumoFile;
 use crate::fs::fs_op::{fs_read_bytes_deserialized, fs_save_bytes_atomic_internal};
@@ -140,6 +216,10 @@ impl FileEntry {
     pub fn needs_rescan(&self) -> bool {
         self.is_stale
     }
+
+    pub fn lumo_file(&self) -> &LumoFile {
+        &self.file
+    }
 }
 
 #[derive(Default)]
@@ -256,6 +336,23 @@ impl FileIndex {
             Some(f(&*e))
         } else {
             None
+        }
+    }
+
+    /// Get the latest checksum for the file at `path` if it's indexed.
+    /// Returns `None` if the path is not in the index; otherwise returns the checksum computation Result.
+    pub async fn get_latest_checksum<P: AsRef<Path>>(&self, path: P) -> Result<Option<u64>> {
+        let p = path.as_ref().to_path_buf();
+        let arc = {
+            let guard = self.inner.read().await;
+            guard.map.get(&p).cloned()
+        };
+        match arc {
+            Some(entry) => {
+                let e = entry.read().await;
+                Ok(Some(e.lumo_file().get_checksum().await?))
+            }
+            None => Ok(None),
         }
     }
 

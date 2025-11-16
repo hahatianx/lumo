@@ -101,12 +101,15 @@ pub fn cli_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
 
         // Emit the public wrapper with the same signature but ApiResponseKind return
         #vis fn #fn_name #generics ( #inputs ) {
+            let start_time = std::time::SystemTime::now();
             match #impl_name( #(#call_args),* ) {
                 Ok(__resp) => {},
                 Err(e) => {
                     println!("{:?}", e);
                 }
             }
+            let end_time = std::time::SystemTime::now();
+            println!("Time elapsed: {:?}", end_time.duration_since(start_time).unwrap());
         }
     };
 

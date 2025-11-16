@@ -2,10 +2,10 @@ mod handlers;
 pub use handlers::AsyncHandleable;
 pub use handlers::NetworkHandleable;
 mod job_summary;
+pub use crate::core::tasks::jobs::get_job_fs_pull_initiate_closure;
 use crate::core::tasks::jobs::{
     get_first_hello_message_closure, get_job_fs_index_dump_closure, get_job_heartbeat_closure,
-    job_fs_inactive_cleanup, job_fs_stale_rescan, job_peer_table_anti_entropy, launch_oneshot_job,
-    launch_periodic_job,
+    job_fs_inactive_cleanup, job_fs_stale_rescan, job_peer_table_anti_entropy,
 };
 pub use crate::core::tasks::low_level_tasks::SendFileTask;
 pub use job_summary::JOB_TABLE;
@@ -18,6 +18,8 @@ pub mod task_queue;
 
 // Re-export public job utilities for external modules
 pub use jobs::job_genre::claimable_job::{ClaimableJobHandle, launch_claimable_job};
+pub use jobs::job_genre::oneshot_job::launch_oneshot_job;
+pub use jobs::job_genre::periodic_job::launch_periodic_job;
 
 use crate::core::tasks::task_queue::{TaskQueue, TaskQueueSender};
 use crate::err::Result;
