@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::str::FromStr;
+use crate::constants::LOCAL_ADDR;
 
 async fn run_handler(api_request_kind: &ApiRequestKind) -> Result<Bytes> {
     let response = match api_request_kind {
@@ -37,7 +38,7 @@ impl AsyncHandleable for ApiRequestMessage {
         sender
             .send(
                 SocketAddr::V4(SocketAddrV4::new(
-                    Ipv4Addr::from_str(&self.from_ip)?,
+                    Ipv4Addr::from_str(LOCAL_ADDR)?,
                     self.from_port,
                 )),
                 response,
