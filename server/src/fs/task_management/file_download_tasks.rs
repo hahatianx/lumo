@@ -75,23 +75,21 @@ pub async fn start_file_download_task<P: AsRef<Path>>(
 
     let q_sender = get_task_queue_sender().await?;
     let job_name = format!(
-        "download:{}, checksum: {}",
+        "download: \"{}\", checksum: {}",
         path.as_ref().to_path_buf().display(),
-        match to_checksum {
-            Expected::Value(c) => c.to_string(),
-            Expected::Any => String::from("-"),
-        }
+        to_checksum
     );
     let summary = format!(
-        "Pending file download for {}",
-        path.as_ref().to_path_buf().display()
+        "File download for \"{}\", challenge: {:016x}",
+        path.as_ref().to_path_buf().display(),
+        challenge
     );
     let cleanup = move || async move {
         cancel_pending(challenge).await;
         Ok(())
     };
     let download_job_handle =
-        launch_claimable_job(&job_name, &summary, cleanup, 120, q_sender).await?;
+        launch_claimable_job(&job_name, &summary, cleanup, 30, q_sender).await?;
 
     let pending_download_task = PendingFileDownloadTask::new(
         challenge,
@@ -103,12 +101,9 @@ pub async fn start_file_download_task<P: AsRef<Path>>(
     insert_download_task(pending_download_task).await;
 
     LOGGER.info(format!(
-        "Pending file download for {}, checksum {}, with challenge {}",
+        "Pending file download for {}, checksum {}, with challenge {:?}",
         path.as_ref().to_path_buf().display(),
-        match to_checksum {
-            Expected::Value(c) => c.to_string(),
-            Expected::Any => String::from("-"),
-        },
+        to_checksum,
         challenge
     ));
 

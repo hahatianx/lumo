@@ -18,10 +18,10 @@ pub async fn get_job_fs_pull_initiate_closure(
     from_checksum: Expected<Checksum>,
     to_checksum: Expected<Checksum>,
 ) -> Result<Box<JobClosure>> {
-    let target_addr: std::net::SocketAddr = peer.peer_addr.to_string().parse().map_err(|e| {
+    let target_addr: std::net::SocketAddr = format!("{}:{}", peer.peer_addr.to_string(), crate::constants::UPD_MESSAGE_PORT).parse().map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("Invalid peer address: {}", e),
+            format!("Invalid peer address: {}, {:?}", e, peer.peer_addr),
         )
     })?;
     let file_path_buf = PathBuf::from(file_path);

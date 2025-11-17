@@ -1,6 +1,8 @@
 use std::fmt::{Debug, Display};
 
 pub enum ClientError {
+    ResponseError(String),
+
     ConnectionBindError(String, String),
     ConnectionTimeoutError(String, String),
     ConnectionReceiverError(String, String),
@@ -22,6 +24,8 @@ impl Display for ClientError {
             }
             ClientError::ResponseParseError(msg, _) => write!(f, "Response parse error: {}", msg),
             ClientError::InternalError(msg, _) => write!(f, "Internal error: {}", msg),
+            ClientError::ResponseError(msg) => write!(f, "client error: {}", msg),
+            _ => write!(f, "Unknown error"),
         }
     }
 }
@@ -44,6 +48,8 @@ impl Debug for ClientError {
             ClientError::InternalError(msg, trace) => {
                 write!(f, "Internal error: {}\nTrace: {}", msg, trace)
             }
+            ClientError::ResponseError(msg) => write!(f, "Client error: {}", msg),
+            _ => write!(f, "Unknown error"),
         }
     }
 }

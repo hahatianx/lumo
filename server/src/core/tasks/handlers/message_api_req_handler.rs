@@ -1,3 +1,4 @@
+use crate::constants::LOCAL_ADDR;
 use crate::core::tasks::handlers::IGNORE_PEER;
 use crate::core::tasks::{AsyncHandleable, NetworkHandleable};
 use crate::err::Result;
@@ -14,7 +15,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::str::FromStr;
-use crate::constants::LOCAL_ADDR;
 
 async fn run_handler(api_request_kind: &ApiRequestKind) -> Result<Bytes> {
     let response = match api_request_kind {
@@ -33,6 +33,8 @@ impl AsyncHandleable for ApiRequestMessage {
     async fn handle(&mut self) -> Result<()> {
         LOGGER.debug(format!("Received API request: {:?}", self).as_str());
         let response = run_handler(&self.request).await?;
+
+        LOGGER.debug(format!("Sending API response: {:?}", response).as_str());
 
         let sender = get_msg_sender().await?;
         sender

@@ -45,7 +45,7 @@ impl FileSync {
 
     pub fn is_valid(&self) -> bool {
         let current_time = SystemTime::now();
-        let diff = current_time.duration_since(self.timestamp).unwrap();
+        let diff = current_time.duration_since(self.timestamp).unwrap_or(std::time::Duration::from_secs(0));
         diff.as_secs() < ENV_VAR.get().unwrap().get_pull_task_validity_in_sec()
     }
 }

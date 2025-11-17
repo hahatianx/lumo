@@ -1,6 +1,7 @@
+use std::fmt::{Debug, Display};
 use serde::Serialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ExpectOrNone<T: PartialEq> {
     Value(T),
     Any,
@@ -20,6 +21,24 @@ impl<T: PartialEq> Into<Option<T>> for ExpectOrNone<T> {
         match self {
             Self::Value(v) => Some(v),
             Self::Any => None,
+        }
+    }
+}
+
+impl<T: Debug + PartialEq> Debug for ExpectOrNone<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Value(v) => write!(f, "Expected({:?})", v),
+            Self::Any => write!(f, "Not specified"),
+        }
+    }
+}
+
+impl<T: Display + PartialEq> Display for ExpectOrNone<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Value(v) => write!(f, "{}", v),
+            Self::Any => write!(f, "Not specified"),
         }
     }
 }

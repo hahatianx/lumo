@@ -118,7 +118,10 @@ macro_rules! extract_response {
     ($response:expr, $variant:path) => {
         match $response {
             $variant(res) => Ok(res),
-            _ => Err(ClientError::ResponseParseError(
+            api_model::protocol::message::api_response_message::ApiResponseKind::Error(err) => {
+                ::core::result::Result::Err($crate::error::ClientError::ResponseError(err))
+            }
+            _ => ::core::result::Result::Err($crate::error::ClientError::ResponseParseError(
                 format!("Expected {}", stringify!($variant)),
                 String::new(),
             )),

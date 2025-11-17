@@ -9,7 +9,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Debug;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 type Challenge = u64;
 type Checksum = u64;
@@ -57,7 +57,7 @@ impl PullRequest {
 
     pub fn request_time_valid(&self) -> bool {
         let now = SystemTime::now();
-        let diff = now.duration_since(self.time_stamp).unwrap();
+        let diff = now.duration_since(self.time_stamp).unwrap_or(Duration::from_secs(0));
         diff.as_secs() < ENV_VAR.get().unwrap().get_pull_task_validity_in_sec()
     }
 
@@ -133,7 +133,7 @@ impl PullMessage {
                 if !pull_request.request_time_valid() {
                     let time_diff = SystemTime::now()
                         .duration_since(pull_request.time_stamp)
-                        .unwrap()
+                        .unwrap_or(Duration::from_secs(0))
                         .as_secs();
                     LOGGER.warn(format!(
                         "Pull request from {} is too old. The request was generated {} seconds ago",
