@@ -1,10 +1,11 @@
 use crate::err::Result;
-use crate::fs::fs_lock::{GuardAccess, RwLock};
-use crate::fs::util::round_to_fat32;
+use crate::fs::fs_lock::{LumoFileGuard, RwLock};
+use crate::fs::util::{get_relative_path, normalize_path, round_to_fat32};
+use crate::global_var::LOGGER;
 use std::fmt::Debug;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock as AsyncRwLock;
 use xxhash_rust::xxh64::Xxh64;
@@ -64,13 +65,26 @@ fn get_file_sz_and_mtime<P: AsRef<Path>>(p: P) -> Result<(u64, SystemTime)> {
 }
 
 /// Must be guarded by system level file lock
+/// LumoFile stores absolute paths internally; relative paths are derived when needed.
 pub struct LumoFile {
-    pub path: PathBuf,
+    path: PathBuf, // absolute path
 
     pub size: u64,
     pub mtime: SystemTime,
 
     fingerprint: AsyncRwLock<FileFingerPrint>,
+}
+
+impl LumoFile {
+    pub fn rel_path(&self) -> PathBuf {
+        // derive relative path from absolute path against working_dir
+        get_relative_path(&self.path).unwrap_or_else(|_| self.path.clone())
+    }
+
+    pub fn abs_path(&self) -> PathBuf {
+        // already absolute; normalize to be safe
+        normalize_path(&self.path.to_str().unwrap()).unwrap()
+    }
 }
 
 impl Debug for LumoFile {
@@ -85,13 +99,15 @@ impl Debug for LumoFile {
 }
 
 impl LumoFile {
+    /// path can either be a relative or absolute path.
     pub async fn new(path: PathBuf) -> Result<Self> {
         let p: &Path = path.as_ref();
+        let full_path = normalize_path(p.to_str().unwrap())?;
         {
-            let _guard = RwLock::new(p).read().await?;
-            let (size, mtime) = get_file_sz_and_mtime(p)?;
+            let _guard = RwLock::new(&full_path).read().await?;
+            let (size, mtime) = get_file_sz_and_mtime(&full_path)?;
             Ok(Self {
-                path,
+                path: full_path,
                 size,
                 mtime,
                 fingerprint: AsyncRwLock::new(FileFingerPrint::new(size, mtime)),
@@ -99,6 +115,7 @@ impl LumoFile {
         }
     }
 
+    /// path must be an absolute path (used for initializing before metadata is known)
     pub fn new_init(path: PathBuf) -> Self {
         Self {
             path,
@@ -160,10 +177,11 @@ impl LumoFile {
             return Ok(checksum);
         }
 
-        let _guard = RwLock::new(&self.path).read().await?;
+        let abs_path = self.abs_path();
+        let guard = RwLock::new(&abs_path).read().await?;
 
         // Compute checksum under exclusive lock; single metadata read is sufficient.
-        let (size, mtime, checksum, _guard) = get_file_checksum(&self.path, _guard).await?;
+        let (size, mtime, checksum, _guard) = get_file_checksum(guard).await?;
 
         // Update cached fingerprint to reflect the observed metadata when checksum was computed.
         self.fingerprint
@@ -176,40 +194,55 @@ impl LumoFile {
 }
 
 // to call this function, you need to acquire a read/write lock on the path
-pub async fn get_file_checksum<P: AsRef<Path>, G: GuardAccess>(
-    p: P,
-    _guard: G,
-) -> Result<(u64, SystemTime, u64, G)> {
-    let path = p.as_ref();
-    // Open file read-only
-    let mut file = fs::File::open(&path)
-        .await
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+pub async fn get_file_checksum<G: LumoFileGuard>(guard: G) -> Result<(u64, SystemTime, u64, G)> {
+    // fetch file descriptor from guard
+    let mut file = &*guard;
+    let position = file.seek(SeekFrom::Current(0))?;
+    file.seek(SeekFrom::Start(0))?;
 
-    let (size, mtime) = get_file_sz_and_mtime(&path)?;
+    let (size, mtime) = {
+        let meta = file.metadata()?;
+        (
+            meta.len(),
+            meta.modified()
+                .ok()
+                .map(round_to_fat32)
+                .unwrap_or(SystemTime::UNIX_EPOCH),
+        )
+    };
 
     // Stream the file into the hasher
     let mut hasher = Xxh64::new(0);
     let mut buf = vec![0u8; 64 * 1024];
+    let mut processed: usize = 0;
     loop {
         let n = file
             .read(&mut buf)
-            .await
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
         if n == 0 {
             break;
         }
         hasher.update(&buf[..n]);
+        processed += n;
+        #[cfg(debug_assertions)]
+        if processed >= (4 * 1024 * 1024) {
+            // In debug/test builds, yield periodically to make long reads observable by tests
+            // that check for system-level locking during checksum calculation.
+            tokio::task::yield_now().await;
+            processed = 0;
+        }
     }
     let checksum = hasher.digest();
-    Ok((size, mtime, checksum, _guard))
+    file.seek(SeekFrom::Start(position))?;
+    Ok((size, mtime, checksum, guard))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{Config, EnvVar};
+    use crate::global_var::ENV_VAR;
     use std::time::Duration;
-    use tokio::task;
     use xxhash_rust::xxh64::xxh64;
 
     fn temp_path(name: &str) -> PathBuf {
@@ -226,6 +259,19 @@ mod tests {
             name
         ));
         p
+    }
+
+    fn create_env_var() {
+        if ENV_VAR.get().is_none() {
+            let mut cfg = Config::new();
+            cfg.identity.machine_name = "test-machine".into();
+            cfg.identity.private_key_loc = "~/.ssh/id_rsa".into();
+            cfg.identity.public_key_loc = "~/.ssh/id_rsa.pub".into();
+            cfg.connection.conn_token = "TOKEN".into();
+            cfg.app_config.working_dir = "/".into();
+            let ev = EnvVar::from_config(&cfg).unwrap();
+            let _ = ENV_VAR.set(ev);
+        }
     }
 
     #[tokio::test]
@@ -366,6 +412,7 @@ mod tests {
 
         fn temp_path_local(name: &str) -> PathBuf {
             let mut p = std::env::temp_dir();
+
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -390,6 +437,18 @@ mod tests {
         let mut files: Vec<(usize, PathBuf)> = Vec::new();
         for s in sizes {
             let p = temp_path_local(&format!("bench_{}", s));
+
+            if ENV_VAR.get().is_none() {
+                let mut cfg = Config::new();
+                cfg.identity.machine_name = "test-machine".into();
+                cfg.identity.private_key_loc = "~/.ssh/id_rsa".into();
+                cfg.identity.public_key_loc = "~/.ssh/id_rsa.pub".into();
+                cfg.connection.conn_token = "TOKEN".into();
+                cfg.app_config.working_dir = p.parent().unwrap().to_str().unwrap().to_string();
+                let ev = EnvVar::from_config(&cfg).unwrap();
+                let _ = ENV_VAR.set(ev);
+            }
+
             let mut f = std::fs::File::create(&p).unwrap();
             let chunk = vec![0xCDu8; 64 * 1024];
             let mut remaining = s;

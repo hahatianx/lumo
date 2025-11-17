@@ -1,7 +1,9 @@
 use crate::err::Result;
-use crate::global_var::ENV_VAR;
+use crate::fs::fs_lock;
+use crate::global_var::{ENV_VAR, LOGGER};
 use crate::utilities::crypto;
 use aes::Aes256;
+use age::secrecy::SecretString;
 use bincode::config;
 use bytes::Bytes;
 use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
@@ -10,7 +12,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -115,15 +117,35 @@ where
     Ok(message)
 }
 
-pub fn f_to_encryption<P: AsRef<Path>, F>(from_path: P, to_path: P, generate_iv: F) -> Result<()>
-where
-    F: Fn() -> Result<[u8; 16]>,
-{
-    use aes::cipher::generic_array::GenericArray;
-    use aes::cipher::{BlockEncrypt, KeyInit};
+fn identity_from_password(password: &str, salt: &str) -> Result<age::x25519::Identity> {
+    // Derive a 32-byte secret from password+salt via SHA-256
+    let mut hasher = Sha256::new();
+    hasher.update(password.as_bytes());
+    hasher.update(salt.as_bytes());
+    let hash = hasher.finalize();
 
+    // Encode as proper age bech32 secret key string with HRP "age-secret-key-"
+    let sk: [u8; 32] = hash[..32].try_into().unwrap();
+    let sk_b32 = bech32::ToBase32::to_base32(&sk);
+    let sk_bech32 = bech32::encode("age-secret-key-", sk_b32, bech32::Variant::Bech32)?;
+
+    Ok(sk_bech32.parse::<age::x25519::Identity>()?)
+}
+
+pub async fn f_to_encryption<P: AsRef<Path>>(
+    from_path: P,
+    to_path: P,
+    passphrase: &str,
+) -> Result<()> {
     let from = from_path.as_ref();
     let to = to_path.as_ref();
+
+    if !crate::utilities::disk_op::check_path_inbound(from) {
+        return Err("from_path is not in working directory".into());
+    }
+    if !crate::utilities::disk_op::check_path_inbound(to) {
+        return Err("to_path is not in working directory".into());
+    }
 
     // 1) Validate paths
     if !from.exists() {
@@ -137,87 +159,36 @@ where
         return Err("to_path must not exist".into());
     }
 
+    let identity = identity_from_password(ENV_VAR.get().unwrap().get_conn_token(), passphrase)?;
+    let recipient = identity.to_public();
+    let encryptor =
+        age::Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))?;
+
     // 2) Open files
-    let infile = std::fs::File::open(from)?;
+    let infile = &*fs_lock::RwLock::new(from).read().await?;
     let mut reader = BufReader::new(infile);
     let outfile = OpenOptions::new().write(true).create_new(true).open(to)?;
-    let mut writer = BufWriter::new(outfile);
+    let mut writer = encryptor.wrap_output(BufWriter::new(outfile))?;
 
-    // 3) Prepare crypto: key, IV and AES-256 block cipher
-    let key: &[u8; 32] = &*KEY;
-    let cipher = Aes256::new(GenericArray::from_slice(key));
-    let iv = generate_iv()?;
-
-    // Write IV in clear at the beginning
-    writer.write_all(&iv)?;
-
-    // 4) Stream encrypt in CBC with PKCS7 padding
-    let mut prev = iv;
-    let mut carry: Vec<u8> = Vec::with_capacity(16);
-    let mut buf = [0u8; 64 * 1024];
-
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        carry.extend_from_slice(&buf[..n]);
-
-        // Process all full 16-byte blocks, leave remainder in carry
-        let mut to_process_len = (carry.len() / 16) * 16;
-        // Defer padding to EOF; here we process all full blocks
-        let mut i = 0;
-        while i + 16 <= to_process_len {
-            let mut block = [0u8; 16];
-            block.copy_from_slice(&carry[i..i + 16]);
-            // XOR with prev (CBC)
-            for j in 0..16 {
-                block[j] ^= prev[j];
-            }
-            // Encrypt single block
-            let mut b = GenericArray::from(block);
-            cipher.encrypt_block(&mut b);
-            // Write ciphertext and update prev
-            writer.write_all(b.as_slice())?;
-            prev.copy_from_slice(b.as_slice());
-            i += 16;
-        }
-        // Remove processed bytes from carry efficiently
-        if i > 0 {
-            carry.drain(0..i);
-        }
-    }
-
-    // 5) Final padding block (PKCS7)
-    let pad_len = 16 - (carry.len() % 16);
-    carry.extend(std::iter::repeat(pad_len as u8).take(pad_len));
-    debug_assert_eq!(carry.len() % 16, 0);
-
-    // Now carry may be 16 bytes (when input was multiple of 16, it was empty and we just appended a full padding block) or >16 if small remainder existed
-    let mut i = 0;
-    while i < carry.len() {
-        let mut block = [0u8; 16];
-        block.copy_from_slice(&carry[i..i + 16]);
-        for j in 0..16 {
-            block[j] ^= prev[j];
-        }
-        let mut b = GenericArray::from(block);
-        cipher.encrypt_block(&mut b);
-        writer.write_all(b.as_slice())?;
-        prev.copy_from_slice(b.as_slice());
-        i += 16;
-    }
-
-    writer.flush()?;
+    std::io::copy(&mut reader, &mut writer)?;
+    writer.finish()?;
     Ok(())
 }
 
-pub fn f_from_encryption<P: AsRef<Path>>(from_path: P, to_path: P) -> Result<()> {
-    use aes::cipher::generic_array::GenericArray;
-    use aes::cipher::{BlockDecrypt, KeyInit};
-
+pub async fn f_from_encryption<P: AsRef<Path>>(
+    from_path: P,
+    to_path: P,
+    passphrase: &str,
+) -> Result<()> {
     let from = from_path.as_ref();
     let to = to_path.as_ref();
+
+    if !crate::utilities::disk_op::check_path_inbound(from) {
+        return Err("from_path is not in working directory".into());
+    }
+    if !crate::utilities::disk_op::check_path_inbound(to) {
+        return Err("to_path is not in working directory".into());
+    }
 
     // 1) Validate paths
     if !from.exists() {
@@ -232,95 +203,15 @@ pub fn f_from_encryption<P: AsRef<Path>>(from_path: P, to_path: P) -> Result<()>
     }
 
     // 2) Open files
-    let infile = std::fs::File::open(from)?;
-    let mut reader = BufReader::new(infile);
+    let infile = &*fs_lock::RwLock::new(from).read().await?;
     let outfile = OpenOptions::new().write(true).create_new(true).open(to)?;
     let mut writer = BufWriter::new(outfile);
 
-    // 3) Read IV (first 16 bytes)
-    let mut iv = [0u8; 16];
-    reader.read_exact(&mut iv)?;
+    let identity = identity_from_password(ENV_VAR.get().unwrap().get_conn_token(), passphrase)?;
+    let decryptor = age::Decryptor::new(infile)?;
+    let mut reader = decryptor.decrypt(std::iter::once(&identity as &dyn age::Identity))?;
 
-    // 4) Prepare cipher
-    let key: &[u8; 32] = &*KEY;
-    let cipher = Aes256::new(GenericArray::from_slice(key));
-
-    // 5) Stream decrypt with CBC and PKCS7 unpadding
-    let mut prev_ct = iv; // previous ciphertext block (IV initially)
-    let mut carry: Vec<u8> = Vec::with_capacity(64 * 1024);
-    let mut buf = [0u8; 64 * 1024];
-    let mut eof = false;
-
-    // Helper to process one plaintext block (not the last padded one)
-    let mut process_block = |block_ct: &[u8; 16], prev: &mut [u8; 16]| -> Result<()> {
-        let mut ga = GenericArray::clone_from_slice(block_ct);
-        cipher.decrypt_block(&mut ga);
-        // XOR with prev
-        let mut plain_block = [0u8; 16];
-        for i in 0..16 {
-            plain_block[i] = ga[i] ^ prev[i];
-        }
-        writer.write_all(&plain_block)?;
-        prev.copy_from_slice(block_ct);
-        Ok(())
-    };
-
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            eof = true;
-        }
-        carry.extend_from_slice(&buf[..n]);
-
-        // While we have at least two blocks in carry, we can process the first block safely
-        while carry.len() >= 32 {
-            let block_ct: [u8; 16] = carry[0..16].try_into().unwrap();
-            process_block(&block_ct, &mut prev_ct)?;
-            carry.drain(0..16);
-        }
-
-        if eof {
-            break;
-        }
-    }
-
-    // At EOF, carry must contain a whole number of blocks and at least one block
-    if carry.len() == 0 || (carry.len() % 16 != 0) {
-        return Err("Ciphertext truncated or invalid (after IV)".into());
-    }
-
-    // If there are more than one blocks, process all but the last
-    while carry.len() > 16 {
-        let block_ct: [u8; 16] = carry[0..16].try_into().unwrap();
-        process_block(&block_ct, &mut prev_ct)?;
-        carry.drain(0..16);
-    }
-
-    debug_assert_eq!(carry.len(), 16);
-    let last_block_ct: [u8; 16] = carry[0..16].try_into().unwrap();
-
-    // Decrypt last block and remove PKCS7 padding
-    let mut ga = GenericArray::clone_from_slice(&last_block_ct);
-    cipher.decrypt_block(&mut ga);
-    let mut last_plain = [0u8; 16];
-    for i in 0..16 {
-        last_plain[i] = ga[i] ^ prev_ct[i];
-    }
-
-    // Validate PKCS7
-    let pad_len = last_plain[15] as usize;
-    if pad_len == 0 || pad_len > 16 {
-        return Err("Invalid PKCS7 padding".into());
-    }
-    for i in 0..pad_len {
-        if last_plain[15 - i] as usize != pad_len {
-            return Err("Invalid PKCS7 padding".into());
-        }
-    }
-    let data_len = 16 - pad_len;
-    writer.write_all(&last_plain[..data_len])?;
-
-    writer.flush()?;
+    std::io::copy(&mut reader, &mut writer)?;
     Ok(())
 }
 
@@ -330,6 +221,7 @@ mod tests {
     use crate::config::Config;
     use crate::config::EnvVar;
     use crate::global_var::ENV_VAR;
+    use crate::utilities::temp_dir::TmpDirGuard;
     use std::fs;
     use std::path::PathBuf;
 
@@ -340,21 +232,42 @@ mod tests {
             cfg.identity.private_key_loc = "~/.keys/priv".into();
             cfg.identity.public_key_loc = "~/.keys/pub".into();
             cfg.connection.conn_token = "TEST_TOKEN".into();
-            cfg.app_config.working_dir = "~/disc_work".into();
+
+            // Use a temp working directory that actually exists, so inbound checks pass
+            let mut wd = std::env::temp_dir();
+            wd.push("disc_proj_workdir_for_tests");
+            let _ = fs::create_dir_all(&wd);
+            cfg.app_config.working_dir = wd.to_string_lossy().to_string();
 
             let ev = EnvVar::from_config(&cfg).expect("EnvVar::from_config should succeed");
             let _ = ENV_VAR.set(ev); // ignore if already set by other tests
         }
     }
 
-    fn tmp_path(name: &str) -> PathBuf {
-        let mut p = std::env::temp_dir();
+    // Create a dedicated temporary workspace directory under the configured working_dir.
+    // All test files are created inside this directory so the guard can remove everything
+    // on drop, even if the test panics midway.
+    fn tmp_dir(prefix: &str) -> TmpDirGuard {
+        use std::path::PathBuf;
+        // Prefer the working_dir from ENV_VAR to satisfy inbound checks, fallback to temp
+        let mut base: PathBuf = if let Some(ev) = ENV_VAR.get() {
+            PathBuf::from(ev.get_working_dir())
+        } else {
+            panic!("ensure_env must be called before tmp_dir");
+        };
+        let _ = fs::create_dir_all(&base);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        p.push(format!("disc_proj_crypto_test_{}_{}", name, nanos));
-        p
+        base.push(format!("disc_proj_crypto_ws_{}_{}", prefix, nanos));
+        let _ = fs::create_dir_all(&base);
+        TmpDirGuard::from(base)
+    }
+
+    // Build a path inside the given workspace directory
+    fn in_dir(dir: &TmpDirGuard, name: &str) -> PathBuf {
+        dir.join(name)
     }
 
     #[test]
@@ -373,16 +286,17 @@ mod tests {
         assert_eq!(data_copy, decrypted);
     }
 
-    #[test]
-    fn test_file_encrypt_decrypt_roundtrip_various_sizes() {
+    #[tokio::test]
+    async fn test_file_encrypt_decrypt_roundtrip_various_sizes() {
         ensure_env();
         let sizes = [0usize, 1, 15, 16, 17, 100_000];
-        let iv = [9u8; 16];
 
         for &sz in &sizes {
-            let from = tmp_path(&format!("plain_{}", sz));
-            let enc = tmp_path(&format!("enc_{}", sz));
-            let dec = tmp_path(&format!("dec_{}", sz));
+            // Per-iteration isolated workspace so each size cleans up independently
+            let ws = tmp_dir("roundtrip");
+            let from = in_dir(&ws, &format!("plain_{}", sz));
+            let enc = in_dir(&ws, &format!("enc_{}", sz));
+            let dec = in_dir(&ws, &format!("dec_{}", sz));
 
             // prepare plaintext file
             let mut plain = Vec::with_capacity(sz);
@@ -390,57 +304,77 @@ mod tests {
                 plain.push((i % 251) as u8);
             }
             fs::write(&from, &plain).unwrap();
+            let passphrase = "QAQ";
 
-            // encrypt to file with fixed IV
-            f_to_encryption(&from, &enc, || Ok(iv)).unwrap();
+            // encrypt to file
+            f_to_encryption(&from, &enc, &passphrase).await.unwrap();
             assert!(enc.exists());
 
-            // verify IV prefix
-            let mut f = fs::File::open(&enc).unwrap();
-            let mut iv_read = [0u8; 16];
-            f.read_exact(&mut iv_read).unwrap();
-            assert_eq!(iv_read, iv);
-
             // decrypt back
-            f_from_encryption(&enc, &dec).unwrap();
+            f_from_encryption(&enc, &dec, &passphrase).await.unwrap();
             let round = fs::read(&dec).unwrap();
             assert_eq!(round, plain);
 
-            // cleanup
-            let _ = fs::remove_file(&from);
-            let _ = fs::remove_file(&enc);
-            let _ = fs::remove_file(&dec);
+            // No manual cleanup: ws guard removes the whole directory on drop
         }
     }
 
-    #[test]
-    fn test_to_path_must_not_exist() {
+    #[tokio::test]
+    async fn test_to_path_must_not_exist() {
         ensure_env();
-        let from = tmp_path("plain_exist");
-        let enc = tmp_path("enc_exist");
+        let ws = tmp_dir("must_not_exist");
+        let from = in_dir(&ws, "plain_exist");
+        let enc = in_dir(&ws, "enc_exist");
         fs::write(&from, b"abc").unwrap();
         fs::write(&enc, b"already there").unwrap();
 
-        let iv = [7u8; 16];
-        let err = f_to_encryption(&from, &enc, || Ok(iv))
-            .err()
-            .expect("should error");
-        let msg = format!("{}", err);
-        assert!(msg.contains("must not exist"));
+        let passphrase = "QAQ";
 
-        let _ = fs::remove_file(&from);
-        let _ = fs::remove_file(&enc);
+        let err = f_to_encryption(&from, &enc, &passphrase).await;
+        if let Ok(()) = err {
+            panic!("should error");
+        }
+        let msg = format!("{}", err.err().unwrap());
+        assert!(msg.contains("must not exist"));
+        // No manual cleanup; ws guard removes the directory
     }
 
-    #[test]
-    fn test_from_path_must_exist_and_be_file() {
+    #[tokio::test]
+    async fn test_from_path_must_exist_and_be_file() {
         ensure_env();
-        let from = tmp_path("missing");
-        let enc = tmp_path("out");
+        let ws = tmp_dir("missing_input");
+        let from = in_dir(&ws, "missing");
+        let enc = in_dir(&ws, "out");
         // from does not exist
-        let err = f_to_encryption(&from, &enc, || Ok([1u8; 16]))
-            .err()
-            .expect("should error");
-        assert!(format!("{}", err).contains("does not exist"));
+        let passphrase = "QAQ";
+        let err = f_to_encryption(&from, &enc, &passphrase).await;
+        if let Ok(()) = err {
+            panic!("should error");
+        }
+        assert!(format!("{}", err.err().unwrap()).contains("does not exist"));
+    }
+
+    #[tokio::test]
+    async fn test_decrypt_with_wrong_passphrase_fails() {
+        ensure_env();
+        // prepare temporary workspace and files
+        let ws = tmp_dir("wrong_pw");
+        let from = in_dir(&ws, "plain_wrong_pw");
+        let enc = in_dir(&ws, "enc_wrong_pw");
+        let dec = in_dir(&ws, "dec_wrong_pw");
+
+        // write some plaintext
+        fs::write(&from, b"The quick brown fox jumps over the lazy dog").unwrap();
+
+        // encrypt with passphrase A
+        let passphrase_ok = "correct horse battery staple";
+        f_to_encryption(&from, &enc, passphrase_ok).await.unwrap();
+        assert!(enc.exists());
+
+        // try decrypt with passphrase B (wrong)
+        let passphrase_bad = "wrong passphrase";
+        let res = f_from_encryption(&enc, &dec, passphrase_bad).await;
+        assert!(res.is_err(), "decryption should fail with wrong passphrase");
+        // No manual cleanup: ws guard removes the directory
     }
 }

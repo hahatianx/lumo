@@ -13,6 +13,7 @@ pub enum FileCommands {
         #[arg(short = 'c', long = "checksum")]
         expected_checksum: Option<u64>,
     },
+    ListLocal,
 }
 
 pub fn handle_file_commands(cmd: &FileCommands) {
@@ -26,5 +27,6 @@ pub fn handle_file_commands(cmd: &FileCommands) {
             file_path.clone(),
             expected_checksum.clone(),
         ),
+        FileCommands::ListLocal => action::list_local_files::list_local_files(),
     }
 }

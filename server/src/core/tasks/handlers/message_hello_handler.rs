@@ -3,27 +3,27 @@ use crate::core::tasks::handlers::IGNORE_SELF;
 use crate::core::tasks::{AsyncHandleable, NetworkHandleable};
 use crate::core::topology::Peer;
 use crate::err::Result;
-use crate::global_var::{ENV_VAR, LOGGER, get_msg_sender};
+use crate::global_var::get_msg_sender;
 use crate::network::protocol::messages::HelloMessage;
 use crate::network::protocol::messages::hello_message::HelloMode;
 use api_model::protocol::protocol::Protocol;
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::net::{IpAddr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
 #[async_trait]
 impl AsyncHandleable for HelloMessage {
     async fn handle(&mut self) -> Result<()> {
-        LOGGER.debug(format!("HelloMessage: {:?}", self));
+        // LOGGER.debug(format!("HelloMessage: {:?}", self));
         update_peer_table(&self).await?;
 
         if self.mode.is_request_reply() {
-            LOGGER.debug("Received a hello message requiring response.");
+            // LOGGER.debug("Received a hello message requiring response.");
             let sender = get_msg_sender().await?;
             let resp = HelloMessage::from_env(HelloMode::empty())?;
             let sock_addr = format!("{}:{}", self.from_ip, self.from_port).parse::<SocketAddr>()?;
-            LOGGER.debug(format!("Response HelloMessage: {:?}", &resp));
+            // LOGGER.debug(format!("Response HelloMessage: {:?}", &resp));
             let b = Bytes::from(resp.serialize());
             sender.send(sock_addr, b).await?;
         }

@@ -5,13 +5,13 @@ pub use file::LumoFile;
 mod fs_index;
 pub use fs_index::FS_INDEX;
 pub use fs_index::init_fs_index;
-mod fs_lock;
+pub(crate) mod fs_lock;
 pub use fs_lock::RwLock;
 mod fs_op;
 mod task_management;
 pub use task_management::file_download_tasks::PendingFileDownloadTask;
 pub use task_management::file_request_tasks::{
-    PendingPull, PullRequestResult, RejectionReason, claim_pending_pull, start_pull_request,
+    PullRequestResult, RejectionReason, claim_pending_pull, start_pull_request,
 };
 pub use task_management::{claim_pending_download, start_file_download_task};
 

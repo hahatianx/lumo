@@ -6,7 +6,8 @@ use crate::types::Expected;
 use crate::utilities::crypto::f_from_encryption;
 use bytes::Bytes;
 use rand::random;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -43,8 +44,9 @@ impl FileRecvTracker {
         LOGGER.debug(format!("FileSync: {:?}", &sync));
         conn.send_bytes(Bytes::from(sync)).await?;
         let ack =
-            FileSyncAck::from_encryption(conn.read_bytes(1024).await?.to_vec().into_boxed_slice())?;
+            FileSyncAck::from_encryption(conn.read_bytes(2048).await?.to_vec().into_boxed_slice())?;
         LOGGER.debug(format!("FileSyncAck: {:?}", &ack));
+        conn.send_bytes(b"".to_vec().into()).await?;
         Ok(ack)
     }
 
@@ -61,7 +63,10 @@ impl FileRecvTracker {
             self.target_path.display()
         ));
 
-        let read_timeout = conn.get_read_timeout();
+        // expected transfer lower bound: 10 MB / s
+        // total_size / 1024 / 1024 / 10
+        let read_timeout =
+            Duration::from_secs(total_size / (1024 * 1024 * 10) + 1).max(conn.get_read_timeout());
         let stream = conn.stream;
         let sz = tokio::time::timeout(
             read_timeout,
@@ -77,19 +82,21 @@ impl FileRecvTracker {
             std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e))
         })?;
 
+        LOGGER.trace(format!("File transfer completed, received {} bytes", sz));
+
         Ok(sz)
     }
     pub async fn recv(&self, mut conn: TcpConn) -> std::result::Result<&PathBuf, FileSyncError> {
         let ack = self.sync(&mut conn).await.map_err(|e| {
             LOGGER.error(format!("FileSync failed: {:?}", e));
-            FileSyncError::AbortedByPeer
+            FileSyncError::Timeout
         })?;
 
         let mut file = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
-            .open(&self.target_path)
+            .open(&self.enc_tmp_path)
             .await
             .map_err(|e| {
                 LOGGER.error(format!(
@@ -97,7 +104,7 @@ impl FileRecvTracker {
                     self.target_path.display(),
                     e
                 ));
-                FileSyncError::AbortedByPeer
+                FileSyncError::SystemError
             })?;
 
         self.download_to_file(conn, &mut file, ack.file_size())
@@ -112,10 +119,16 @@ impl FileRecvTracker {
             return Err(FileSyncError::SystemError);
         }
 
-        f_from_encryption(&self.enc_tmp_path, &self.target_path).map_err(|e| {
-            LOGGER.error(format!("Failed to decrypt file: {:?}", e));
-            FileSyncError::FileMalformed
-        })?;
+        let passphrase = format!("{}", ack.nonce());
+        f_from_encryption(&self.enc_tmp_path, &self.target_path, &passphrase)
+            .await
+            .map_err(|e| {
+                LOGGER.error(format!(
+                    "Failed to decrypt file: {:?}, {:?}",
+                    &self.enc_tmp_path, e
+                ));
+                FileSyncError::FileMalformed
+            })?;
 
         Ok(&self.target_path)
     }

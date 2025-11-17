@@ -58,7 +58,7 @@ mod tests {
         cfg.identity.private_key_loc = "~/.keys/priv".into();
         cfg.identity.public_key_loc = "~/.keys/pub".into();
         cfg.connection.conn_token = "CONN_TOKEN".into();
-        cfg.app_config.working_dir = "~/ld_work".into();
+        cfg.app_config.working_dir = "~".into();
 
         // Initialize ENV_VAR before touching APP_CONFIG
         let env_var = EnvVar::from_config(&cfg).expect("EnvVar::from_config should succeed");

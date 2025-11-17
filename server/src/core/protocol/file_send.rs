@@ -1,6 +1,6 @@
 use crate::core::protocol::file_sync::{FileSyncAck, FileSyncError};
 use crate::err::Result;
-use crate::fs::LumoFile;
+use crate::fs::{LumoFile, fs_lock};
 use crate::global_var::{ENV_VAR, LOGGER};
 use crate::network::TcpConn;
 use crate::utilities::crypto::f_to_encryption;
@@ -15,33 +15,40 @@ struct FileSendTracker {
     nonce: Nonce,
 
     source_path: PathBuf,
-    enc_tmp_path: PathBuf,
 }
 
 impl FileSendTracker {
     pub fn new(nonce: Nonce, source_path: PathBuf) -> Self {
         // Build base path: <working_dir>/.disc/tmp_downloads
         let base = PathBuf::from(ENV_VAR.get().unwrap().get_temp_downloads_dir());
-        let enc_tmp_path = base.join(format!("recv-{}-{}.cipher", nonce, rand::random::<u64>()));
 
-        FileSendTracker {
-            nonce,
-            source_path,
-            enc_tmp_path,
-        }
+        FileSendTracker { nonce, source_path }
     }
 
     async fn send_file(&self, conn: &mut TcpConn, total_size: u64) -> Result<()> {
-        let file = tokio::fs::File::open(&self.enc_tmp_path).await?;
+        // Acquire a read lock on the encrypted temp file to ensure consistency across processes
+        let guard = fs_lock::RwLock::new(&self.source_path).read().await?;
 
         LOGGER.trace(format!(
             "Sending file {} to peer",
-            self.enc_tmp_path.display()
+            self.source_path.display()
         ));
 
-        let write_timeout = conn.get_write_timeout();
+        // Clone the underlying std::fs::File so we can create an async file while keeping the lock guard alive
+        let std_file = guard.try_clone()?;
+        let file = tokio::fs::File::from_std(std_file);
 
+        let write_timeout = conn.get_write_timeout().max(std::time::Duration::from_secs(
+            total_size / (1024 * 1024 * 10) as u64,
+        ));
         let stream = &mut conn.stream;
+
+        // Limit the reader to the expected total size and copy to the peer with a timeout
+        LOGGER.debug(format!(
+            "Starting file transfer, total_size: {} bytes, expected time {}",
+            total_size,
+            write_timeout.as_secs_f64() * 1000.0
+        ));
         tokio::time::timeout(
             write_timeout,
             tokio::io::copy(&mut file.take(total_size), stream),
@@ -52,21 +59,10 @@ impl FileSendTracker {
     }
 
     pub async fn send(&self, conn: &mut TcpConn) -> std::result::Result<(), FileSyncError> {
-        f_to_encryption(&self.source_path, &self.enc_tmp_path, || {
-            let iv: [u8; 16] = rand::random();
-            Ok(iv)
-        })
-        .map_err(|e| {
-            LOGGER.warn(format!("Encryption source file failed: {:?}", e));
+        let lumo_file = LumoFile::new(self.source_path.clone()).await.map_err(|e| {
+            LOGGER.warn(format!("LumoFile create error: {:?}", e));
             FileSyncError::SystemError
         })?;
-
-        let lumo_file = LumoFile::new(self.enc_tmp_path.clone())
-            .await
-            .map_err(|e| {
-                LOGGER.warn(format!("LumoFile create error: {:?}", e));
-                FileSyncError::SystemError
-            })?;
 
         let total_size = lumo_file.size;
         let checksum = lumo_file.get_checksum().await.map_err(|e| {
@@ -85,22 +81,21 @@ impl FileSendTracker {
             FileSyncError::AbortedByPeer
         })?;
 
+        // pause here to allow the peer to read the ACK from the server before we start sending the file
+        let _ = conn.read_bytes(10).await.map_err(|e| {
+            LOGGER.warn(format!(
+                "Waiting for peer to confirm sync ack aborted {:?}",
+                e
+            ));
+            FileSyncError::AbortedByPeer
+        })?;
+
         self.send_file(conn, total_size).await.map_err(|e| {
             LOGGER.warn(format!("File send error {:?}", e));
             FileSyncError::AbortedByPeer
         })?;
 
         Ok(())
-    }
-}
-
-impl Drop for FileSendTracker {
-    fn drop(&mut self) {
-        LOGGER.info(format!(
-            "FileSendTracker dropped: nonce={}, paths [{:?}] removed",
-            self.nonce, &self.enc_tmp_path
-        ));
-        std::fs::remove_file(&self.enc_tmp_path).ok();
     }
 }
 

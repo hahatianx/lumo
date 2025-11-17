@@ -1,12 +1,13 @@
 use crate::err::Result;
 use crate::global_var::ENV_VAR;
+use crate::network::protocol::HandleableNetworkProtocol;
 use crate::utilities::crypto::{from_encryption, to_encryption};
 use api_model::protocol::protocol::Protocol;
 use api_model::protocol::token::Token;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 type Nonce = u64;
 type Challenge = u64;
@@ -40,9 +41,7 @@ impl Display for PullRejectionReason {
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum PullDecision {
-    // TODO: distinguish two u64s nonce and challenge
     Accept(Challenge, Nonce),
-    // TODO: add challenge to reject message as well
     Reject(Challenge, PullRejectionReason),
 }
 
@@ -87,7 +86,9 @@ impl PullResponse {
 
     pub fn timestamp_valid(&self) -> bool {
         let now = SystemTime::now();
-        let diff = now.duration_since(self.timestamp).unwrap();
+        let diff = now
+            .duration_since(self.timestamp)
+            .unwrap_or(Duration::from_secs(0));
         diff.as_secs() < ENV_VAR.get().unwrap().get_pull_task_validity_in_sec()
     }
 }
@@ -116,6 +117,7 @@ impl PullResponseMessage {
 }
 
 // PullResponseMessage is for responses we send; no network handling on server side for now.
+impl HandleableNetworkProtocol for PullResponseMessage {}
 
 impl Protocol for PullResponseMessage {
     fn serialize(&self) -> Vec<u8> {

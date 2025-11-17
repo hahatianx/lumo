@@ -23,7 +23,7 @@ impl PullMessage {
                     PullRequestResult::Accept(nonce) => {
                         LOGGER.trace(format!("[PullRequest] Accepted pull request for file '{}', challenge {}, nonce {}",
                                              request.get_path(), request.get_challenge(), nonce));
-                        PullDecision::Accept(nonce, request.get_challenge())
+                        PullDecision::Accept(request.get_challenge(), nonce)
                     }
                     PullRequestResult::Reject(reason) => {
                         LOGGER.trace(format!("[PullRequest] Rejected pull request for file '{}', challenge {}, reason {:?}",

@@ -1,5 +1,4 @@
 use std::fmt::{Debug, Display};
-use serde::Serialize;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ExpectOrNone<T: PartialEq> {

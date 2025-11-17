@@ -3,7 +3,7 @@ use crate::core::tasks::jobs::JobClosure;
 use crate::core::tasks::low_level_tasks::{SendControlMessageTask, SendType};
 use crate::core::tasks::task_queue::TaskQueueSender;
 use crate::err::Result;
-use crate::global_var::{ENV_VAR, LOGGER};
+use crate::global_var::ENV_VAR;
 use crate::network::protocol::CUR_LEADER;
 use crate::network::protocol::messages::HelloMessage;
 use crate::network::protocol::messages::hello_message::HelloMode;
@@ -25,8 +25,6 @@ pub async fn get_job_heartbeat_closure(task_q: &TaskQueueSender) -> Result<Box<J
                     .filter(|p| p.is_active.load(std::sync::atomic::Ordering::Relaxed))
                     .cloned()
                     .collect::<Vec<_>>();
-
-                LOGGER.debug(format!("Active peers: {:?}", active_peers));
 
                 let mut hello_mode = HelloMode::empty();
                 {
@@ -97,7 +95,7 @@ mod tests {
             cfg.identity.private_key_loc = "~/.ssh/id_rsa".into();
             cfg.identity.public_key_loc = "~/.ssh/id_rsa.pub".into();
             cfg.connection.conn_token = "TOKEN".into();
-            cfg.app_config.working_dir = "~/tmp".into();
+            cfg.app_config.working_dir = "~/".into();
             let ev = EnvVar::from_config(&cfg)?;
             let _ = ENV_VAR.set(ev);
         }

@@ -83,8 +83,12 @@ impl AsyncHandleable for SendFileTask {
         })?;
 
         // 5. Send the file using protocol helper
-        let res =
-            file_send::send_file(nonce, pending_pull.temp_path.clone(), &mut self.tcp_conn).await;
+        let res = file_send::send_file(
+            nonce,
+            pending_pull.temp_file_path.clone(),
+            &mut self.tcp_conn,
+        )
+        .await;
 
         // 6. End the claimed job with proper status and log errors if any
         match res {

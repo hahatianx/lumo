@@ -1,6 +1,6 @@
 use crate::global_var::LOGGER;
 use std::ops::Deref;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub struct TmpDirGuard(pub PathBuf);
@@ -23,6 +23,12 @@ impl From<PathBuf> for TmpDirGuard {
 impl AsRef<PathBuf> for TmpDirGuard {
     fn as_ref(&self) -> &PathBuf {
         &self.0
+    }
+}
+
+impl AsRef<Path> for TmpDirGuard {
+    fn as_ref(&self) -> &Path {
+        self.0.as_path()
     }
 }
 

@@ -1,4 +1,5 @@
 use crate::err::Result;
+use crate::protocol::models::file::list_local_files::ListLocalFilesRequest;
 use crate::protocol::models::file::pull_file::PullFileRequest;
 use crate::protocol::models::local_file::local_pull_file::LocalPullFileRequest;
 use crate::protocol::models::peer::list_peers::ListPeersRequest;
@@ -14,6 +15,7 @@ pub enum ApiRequestKind {
     LocalPullFile(LocalPullFileRequest),
     PullFile(PullFileRequest),
     ListTasks(ListTasksRequest),
+    ListLocalFiles(ListLocalFilesRequest),
 }
 
 #[derive(Debug, Clone)]

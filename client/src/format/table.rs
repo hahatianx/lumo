@@ -37,7 +37,7 @@ where
     fn format_data(&self, data: &'a [impl TableEntry<N, S>]) -> Vec<Vec<String>> {
         data.iter()
             .map(|entry| {
-                let mut row = entry.fmt();
+                let row = entry.fmt();
                 // Collect keys and sort them ascending
                 let mut keys: Vec<usize> = row.keys().copied().collect();
                 keys.sort_unstable();
@@ -51,10 +51,11 @@ where
     }
 
     #[inline]
-    fn visible_len(text: &str) -> usize {
-        // Count visible characters without allocating: skip ANSI escape sequences.
-        // We handle CSI sequences of the form "\x1b[ ... m" which our colorizer emits.
-        let mut count = 0usize;
+    fn visible_width(text: &str) -> usize {
+        use unicode_width::UnicodeWidthChar;
+        // Compute the terminal display width, ignoring ANSI escape sequences.
+        // Handles CSI sequences produced by our colorizer ("\x1b[ ... m").
+        let mut width = 0usize;
         let mut chars = text.chars().peekable();
         while let Some(c) = chars.next() {
             if c == '\x1b' {
@@ -69,9 +70,10 @@ where
                 }
                 continue;
             }
-            count += 1;
+            // Sum Unicode display width (CJK wide, emoji, etc.).
+            width += UnicodeWidthChar::width(c).unwrap_or(0);
         }
-        count
+        width
     }
 
     #[inline]
@@ -88,7 +90,7 @@ where
     #[inline]
     fn push_padded(result: &mut String, text: &str, width: usize) {
         result.push_str(text);
-        let vlen = Self::visible_len(text);
+        let vlen = Self::visible_width(text);
         if width > vlen {
             Self::push_char_n(result, ' ', width - vlen);
         }
@@ -101,14 +103,14 @@ where
         // Calculate max width for each column using visible width (ignore ANSI color codes)
         let mut widths = S::names()
             .iter()
-            .map(|h| h.name.chars().count())
+            .map(|h| Self::visible_width(h.name))
             .collect::<Vec<_>>();
         let rows = self.format_data(data);
 
         for row in rows.iter() {
             for (i, cell) in row.iter().enumerate() {
                 if i < widths.len() {
-                    widths[i] = widths[i].max(Self::visible_len(cell));
+                    widths[i] = widths[i].max(Self::visible_width(cell));
                 }
             }
         }

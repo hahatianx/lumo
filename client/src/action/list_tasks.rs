@@ -10,7 +10,6 @@ use api_model::protocol::models::task::list_tasks::ListTasksRequest;
 use api_model::protocol::models::task::task::{JobStatus, JobType, Task};
 use cli_handler::cli_impl;
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
 
 static FULL_TASK_TABLE_SCHEMA: [&'static TableColumn; 10] = [
     &TableColumn { idx: 0, name: "Id" },
@@ -79,13 +78,13 @@ impl TableEntry<10, FullTaskTable> for Task {
         let mut row = std::collections::HashMap::new();
 
         row.insert(0, format!("{:016x}", self.job_id));
-        row.insert(1, self.job_name.clone());
-        row.insert(2, str_safe_truncate(&self.summary, 150));
-        row.insert(3, util::readable_format(self.launch_time));
+        row.insert(1, util::str_safe_truncate(&self.job_name, 20));
+        row.insert(2, str_safe_truncate(&self.summary, 50));
+        row.insert(3, util::system_time_to_human_readable(self.launch_time));
         row.insert(
             4,
             match self.complete_time {
-                Some(time) => util::readable_format(time),
+                Some(time) => util::system_time_to_human_readable(time),
                 None => String::from("-"),
             },
         );
@@ -94,7 +93,7 @@ impl TableEntry<10, FullTaskTable> for Task {
             6,
             self.status_message
                 .as_ref()
-                .map_or_else(|| String::from(""), |msg| str_safe_truncate(msg, 50)),
+                .map_or_else(|| String::from(""), |msg| str_safe_truncate(msg, 150)),
         );
         match self.job_type {
             JobType::Periodic => {

@@ -9,14 +9,17 @@
 use crate::core::tasks::{ClaimableJobHandle, launch_claimable_job};
 use crate::err::Result;
 use crate::fs::fs_lock;
+use crate::fs::util::normalize_path;
 use crate::global_var::{ENV_VAR, LOGGER, get_task_queue_sender};
 use crate::types::Expected;
+use crate::utilities::crypto::f_to_encryption;
 use crate::utilities::temp_dir::TmpDirGuard;
 use rand::random;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
 type Checksum = u64;
@@ -26,6 +29,7 @@ type Nonce = u64;
 pub struct PendingPull {
     pub nonce: Nonce,
     pub original_path: PathBuf,
+    pub temp_file_path: PathBuf,
     pub temp_path: TmpDirGuard,
     pub checksum: Checksum,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -48,6 +52,9 @@ impl PendingPull {
         };
         Ok(launch_claimable_job(&job_name, &summary, cleanup, 120, q_sender).await?)
     }
+
+    /// source_path is either relative to working_dir or absolute.
+    /// Returns a PendingPull on success, or an error if the file cannot be validated or copied.
     pub async fn validate_and_new<P>(
         nonce: Nonce,
         source_path: P,
@@ -56,8 +63,16 @@ impl PendingPull {
     where
         P: AsRef<Path>,
     {
-        ////  TODO: resolve dangling tmp_dir issue here.
-        let original_path: PathBuf = source_path.as_ref().into();
+        let original_full_path: PathBuf = normalize_path(source_path.as_ref().to_str().unwrap())
+            .map_err(|e| {
+                LOGGER.error(format!(
+                    "Failed to normalize path '{}': {:?}",
+                    source_path.as_ref().to_str().unwrap(),
+                    e
+                ));
+                RejectionReason::SystemError
+            })?;
+
         // Prepare temp destination in .disc/tmp_downloads
         let base_download_dir = PathBuf::from(ENV_VAR.get().unwrap().get_temp_downloads_dir());
         let tmp_dir = base_download_dir.join(format!("send-{:x}", nonce));
@@ -67,10 +82,17 @@ impl PendingPull {
                 tmp_dir.display(),
                 e
             ));
-            RejectionReason::PathNotFound
+            RejectionReason::SystemError
         })?; // best-effort
 
-        let tmp_dest = tmp_dir.join(format!("{}.{}", original_path.to_string_lossy(), nonce));
+        let file_name = original_full_path.file_name().ok_or_else(|| {
+            LOGGER.error(format!(
+                "Failed to get file name from path '{}'",
+                original_full_path.display()
+            ));
+            RejectionReason::SystemError
+        })?;
+        let tmp_dest = tmp_dir.join(format!("{}.{}", file_name.to_string_lossy(), nonce));
         // Guard to ensure temp dir is removed if we error out before constructing PendingPull
         let tmp_dir_guard: TmpDirGuard = tmp_dir.into();
 
@@ -78,42 +100,49 @@ impl PendingPull {
         let found_checksum = {
             LOGGER.debug(format!(
                 "Copying file '{}' to temp location '{}'",
-                original_path.display(),
+                original_full_path.display(),
                 tmp_dest.display()
             ));
 
-            if let Err(_) = fs_lock::RwLock::new(&original_path).write().await {
-                return Err(RejectionReason::PathNotFound);
-            }
-            LOGGER.debug(format!("read guard fetched {}", original_path.display()));
-
-            let lumo_file = crate::fs::file::LumoFile::new(original_path.clone())
+            let read_guard = fs_lock::RwLock::new(&original_full_path)
+                .read()
                 .await
                 .map_err(|e| {
                     LOGGER.error(format!(
-                        "Failed to create LumoFile for {}: {:?}",
-                        original_path.display(),
+                        "Failed to acquire read lock for {}: {:?}",
+                        original_full_path.display(),
                         e
                     ));
-                    RejectionReason::PathNotFile
+                    RejectionReason::PathNotFound
                 })?;
-            let checksum = lumo_file.get_checksum().await.map_err(|e| {
-                LOGGER.error(format!(
-                    "Failed to get checksum for {}: {:?}",
-                    original_path.display(),
-                    e
-                ));
-                RejectionReason::PathNotFile
-            })?;
-            tokio::fs::copy(&original_path, &tmp_dest)
+
+            let (f_size, m_time, checksum, read_guard) =
+                crate::fs::file::get_file_checksum(read_guard)
+                    .await
+                    .map_err(|e| {
+                        LOGGER.error(format!(
+                            "Failed to get checksum for {}: {:?}",
+                            original_full_path.display(),
+                            e
+                        ));
+                        RejectionReason::SystemError
+                    })?;
+
+            let passphrase = format!("{}", nonce);
+            f_to_encryption(&original_full_path, &tmp_dest, &passphrase)
                 .await
                 .map_err(|e| {
-                    LOGGER.error(format!("Failed to copy file to temp location: {:?}", e));
-                    RejectionReason::PathNotFile
+                    LOGGER.error(format!(
+                        "Failed to encrypt file {}: {:?}",
+                        original_full_path.display(),
+                        e
+                    ));
+                    RejectionReason::SystemError
                 })?;
+
             LOGGER.debug(format!(
-                "Copied file '{}' to temp location '{}', file checksum {}",
-                original_path.display(),
+                "Copied and encrypted file '{}' to temp location '{}', file checksum {}",
+                original_full_path.display(),
                 tmp_dest.display(),
                 checksum
             ));
@@ -125,12 +154,12 @@ impl PendingPull {
             return Err(RejectionReason::FileChecksumMismatch);
         }
 
-        let handle = Self::create_claimable_job(nonce, &original_path)
+        let handle = Self::create_claimable_job(nonce, &original_full_path)
             .await
             .map_err(|e| {
                 LOGGER.error(format!(
                     "Failed to create claimable job for {}: {:?}",
-                    original_path.display(),
+                    original_full_path.display(),
                     e
                 ));
                 RejectionReason::SystemError
@@ -138,7 +167,8 @@ impl PendingPull {
 
         Ok(Self {
             nonce,
-            original_path,
+            original_path: original_full_path,
+            temp_file_path: tmp_dest,
             temp_path: tmp_dir_guard,
             checksum: found_checksum,
             created_at: chrono::Utc::now(),
@@ -196,8 +226,7 @@ pub async fn start_pull_request(
     expected_checksum: Expected<Checksum>,
 ) -> Result<PullRequestResult> {
     // Resolve and validate source path
-    let base = PathBuf::from(ENV_VAR.get().unwrap().get_working_dir());
-    let src = secure_join(&base, Path::new(path_str))?;
+    let src = normalize_path(path_str)?;
 
     if !src.exists() {
         return Ok(PullRequestResult::Reject(RejectionReason::PathNotFound));
@@ -210,11 +239,8 @@ pub async fn start_pull_request(
     }
 
     let nonce = random::<u64>();
-    let file_name = src
-        .file_name()
-        .ok_or_else(|| format!("Invalid file name for {}", src.display()))?;
 
-    match PendingPull::validate_and_new(nonce, file_name, expected_checksum).await {
+    match PendingPull::validate_and_new(nonce, src, expected_checksum).await {
         Ok(pending) => {
             PENDING_PULLS.write().await.insert(nonce, pending);
             Ok(PullRequestResult::Accept(nonce))
@@ -242,20 +268,4 @@ async fn cancel_pending(nonce: Nonce) {
         nonce
     ));
     let _ = PENDING_PULLS.write().await.remove(&nonce);
-}
-
-/// Join `base` with `rel` and ensure the resulting canonical path stays inside `base`.
-fn secure_join(base: &Path, rel: &Path) -> Result<PathBuf> {
-    let joined = base.join(rel);
-    let canon_base = std::fs::canonicalize(base)?;
-    let canon_joined = std::fs::canonicalize(&joined)?;
-    if !canon_joined.starts_with(&canon_base) {
-        return Err(format!(
-            "Path traversal detected: '{}' escapes base '{}'",
-            canon_joined.display(),
-            canon_base.display()
-        )
-        .into());
-    }
-    Ok(canon_joined)
 }

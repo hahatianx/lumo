@@ -1,7 +1,8 @@
 use crate::constants::TCP_FILE_PORT;
 use crate::core::protocol::file_recv::FileRecvTracker;
 use crate::core::protocol::file_sync::FileSyncError;
-use crate::core::tasks::{AsyncHandleable, JobStatus};
+use crate::core::tasks::handlers::IGNORE_SELF;
+use crate::core::tasks::{AsyncHandleable, JobStatus, NetworkHandleable};
 use crate::fs::file::get_file_checksum;
 use crate::fs::{PendingFileDownloadTask, claim_pending_download};
 use crate::global_var::LOGGER;
@@ -79,34 +80,58 @@ impl PullResponseMessage {
         if from_checksum.has_expected() {
             // from checksum is not None, meaning we are replacing the file whose checksum is from_checksum
 
-            let _write_guard = crate::fs::RwLock::new(pending_file_download.file_path.clone())
+            let write_guard = crate::fs::RwLock::new(pending_file_download.file_path.clone())
                 .write()
                 .await
                 .map_err(|e| {
                     DownloadFileError::SystemError(format!("Failed to lock file: {:?}", e))
                 })?;
 
+            LOGGER.debug(format!(
+                "File {} locked successfully",
+                pending_file_download.file_path.display()
+            ));
+
             let (_, _, checksum, _write_guard) =
-                get_file_checksum(&pending_file_download.file_path, _write_guard)
-                    .await
-                    .map_err(|e| {
-                        DownloadFileError::SystemError(format!(
-                            "Failed to get file checksum: {:?}",
-                            e
-                        ))
-                    })?;
+                get_file_checksum(write_guard).await.map_err(|e| {
+                    DownloadFileError::SystemError(format!("Failed to get file checksum: {:?}", e))
+                })?;
+
+            LOGGER.debug(format!(
+                "File {} checksum fetched.",
+                pending_file_download.file_path.display()
+            ));
 
             if from_checksum.not_match_expected(&checksum) {
                 return Err(DownloadFileError::FileFromChecksumMismatch);
             }
 
-            std::fs::rename(res_path, pending_file_download.file_path.clone()).map_err(|e| {
-                DownloadFileError::SystemError(format!("Failed to rename file: {:?}", e))
-            })?;
+            LOGGER.debug(format!(
+                "Moving {} to {}",
+                res_path.display(),
+                pending_file_download.file_path.display()
+            ));
+
+            tokio::fs::rename(&res_path, &pending_file_download.file_path)
+                .await
+                .map_err(|e| {
+                    DownloadFileError::SystemError(format!("Failed to rename file: {:?}", e))
+                })?;
+
+            LOGGER.debug(format!(
+                "File {} copied from temp successfully",
+                pending_file_download.file_path.display()
+            ));
         } else {
-            std::fs::rename(res_path, pending_file_download.file_path.clone()).map_err(|e| {
-                DownloadFileError::SystemError(format!("Failed to rename file: {:?}", e))
-            })?;
+            LOGGER.debug(format!(
+                "QAQ Moving {} to {}",
+                res_path.display(),
+                pending_file_download.file_path.display()
+            ));
+            crate::utilities::disk_op::fs_rename(res_path, &pending_file_download.file_path)
+                .map_err(|e| {
+                    DownloadFileError::SystemError(format!("Failed to rename file: {:?}", e))
+                })?;
         }
 
         Ok(())
@@ -205,5 +230,11 @@ impl AsyncHandleable for PullResponseMessage {
         let _ = self.process_file_download(*resp.get_decision()).await?;
 
         Ok(())
+    }
+}
+
+impl NetworkHandleable for PullResponseMessage {
+    fn should_ignore_by_sockaddr_peer(&self, peer: &SocketAddr) -> bool {
+        IGNORE_SELF(peer)
     }
 }

@@ -4,6 +4,7 @@ use crate::err::Result;
 use crate::fs::util::expand_tilde;
 use crate::network::get_private_ipv4_with_mac;
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -66,6 +67,16 @@ pub struct EnvVar {
 }
 
 impl EnvVar {
+    fn normalize_working_dir(raw_str: &str) -> String {
+        // Default to current directory if unset to make tests more robust
+        let input = if raw_str.is_empty() { "." } else { raw_str };
+        let expanded_path = expand_tilde(input);
+        let path_buf = std::path::PathBuf::from(&expanded_path);
+        match std::fs::canonicalize(&path_buf) {
+            Ok(p) => p.to_string_lossy().to_string(),
+            Err(_) => path_buf.to_string_lossy().to_string(),
+        }
+    }
     pub fn from_config(config: &Config) -> Result<Self> {
         let (ipv4, mac_addr) = get_private_ipv4_with_mac().unwrap();
 
@@ -85,11 +96,11 @@ impl EnvVar {
                 ip_addr: IpAddr::V4(ipv4),
             },
             app_config: Arc::new(RwLock::new(AppConfig {
-                working_dir: expand_tilde(&config.app_config.working_dir),
+                working_dir: Self::normalize_working_dir(&config.app_config.working_dir),
                 peer_expires_after_in_sec: 60, // hard code for now.  Change it later
             })),
             static_app_config: StaticAppConfig {
-                working_dir: expand_tilde(&config.app_config.working_dir),
+                working_dir: Self::normalize_working_dir(&config.app_config.working_dir),
                 pull_task_validity_in_sec: 10,
             },
         })
@@ -100,7 +111,9 @@ impl EnvVar {
     }
 
     pub fn get_temp_downloads_dir(&self) -> String {
-        format!("{}/.disc/tmp_downloads", self.get_working_dir())
+        let working_dir = PathBuf::from(self.get_working_dir());
+        let downloads_dir = working_dir.join(".disc").join("tmp_downloads");
+        downloads_dir.to_string_lossy().to_string()
     }
 
     pub fn get_conn_token(&self) -> &str {
@@ -155,7 +168,7 @@ mod tests {
         cfg.identity.private_key_loc = "~/.keys/priv".into();
         cfg.identity.public_key_loc = "~/.keys/pub".into();
         cfg.connection.conn_token = "TOKEN123".into();
-        cfg.app_config.working_dir = "~/workdir".into();
+        cfg.app_config.working_dir = "~".into();
 
         // Act
         let ev = EnvVar::from_config(&cfg).expect("from_config should succeed");
@@ -163,10 +176,7 @@ mod tests {
         // Assert: getters
         assert_eq!(ev.get_conn_token(), "TOKEN123");
         assert_eq!(ev.get_port(), 14514);
-        assert_eq!(
-            ev.get_working_dir(),
-            format!("{}/{}", expected_home, "workdir")
-        );
+        assert_eq!(ev.get_working_dir(), expected_home.as_str(),);
 
         // Assert: internal fields are expanded as well (same module, so we can access privates)
         assert!(

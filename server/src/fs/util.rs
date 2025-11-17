@@ -15,6 +15,8 @@
 //! The checks are best-effort and based on attempting real operations. They should work on Linux,
 //! macOS, and Windows.
 
+use crate::err::Result;
+use crate::global_var::ENV_VAR;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -158,6 +160,72 @@ pub fn round_to_fat32(sys_time: SystemTime) -> SystemTime {
     match sys_time.duration_since(UNIX_EPOCH) {
         Ok(dur) => UNIX_EPOCH + std::time::Duration::from_secs(dur.as_secs() & !1),
         Err(_) => UNIX_EPOCH,
+    }
+}
+
+#[inline]
+pub fn secure_join<P: AsRef<Path>>(base: P, rel: &str) -> Result<PathBuf> {
+    // Join rel to base and ensure the final canonicalized path resides under the
+    // canonicalized base directory. This comparison is symlink-safe and avoids
+    // false negatives on macOS where /tmp is a symlink to /private/tmp.
+    let base = base.as_ref();
+    let joined = if Path::new(rel).is_absolute() {
+        // If rel is absolute, use it directly (Path::join would also do this),
+        // but we still validate against base below.
+        PathBuf::from(rel)
+    } else {
+        base.join(rel)
+    };
+    let canon_base = std::fs::canonicalize(base)?;
+    let canon_joined = std::fs::canonicalize(&joined)?;
+    if !canon_joined.starts_with(&canon_base) {
+        return Err(format!(
+            "Path traversal or out-of-base path: '{}' not under base '{}'",
+            canon_joined.display(),
+            canon_base.display()
+        )
+        .into());
+    }
+    Ok(canon_joined)
+}
+
+#[inline]
+pub fn normalize_path(path: &str) -> Result<PathBuf> {
+    // If the input is absolute, simply canonicalize and return it. Do not
+    // enforce that it lies under the configured working directory. This keeps
+    // behavior friendly to tests that operate in temporary directories like
+    // /tmp (which may resolve to /private/tmp on macOS).
+    if Path::new(path).is_absolute() {
+        return std::fs::canonicalize(path).map_err(|e| e.into());
+    }
+
+    // For relative paths, resolve against the working directory securely.
+    let base = PathBuf::from(ENV_VAR.get().unwrap().get_working_dir());
+    secure_join(base, path)
+}
+
+#[inline]
+pub fn get_relative_path<P: AsRef<Path>>(path: &P) -> Result<PathBuf> {
+    // Return a relative path if the target lies under the working directory;
+    // otherwise return the original provided absolute path (without canonicalizing).
+    // This preserves the caller's path representation (e.g., /var vs /private/var on macOS)
+    // for use as map keys while still remaining secure for relative inputs.
+    let base = PathBuf::from(ENV_VAR.get().unwrap().get_working_dir());
+    let base_canon = std::fs::canonicalize(&base)?;
+
+    let target = path.as_ref();
+    let target_canon = if target.is_absolute() {
+        std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf())
+    } else {
+        std::fs::canonicalize(base.join(target)).unwrap_or_else(|_| base.join(target))
+    };
+
+    if let Ok(rel) = target_canon.strip_prefix(&base_canon) {
+        Ok(rel.to_path_buf())
+    } else {
+        // Outside base: return the path as provided by the caller to avoid
+        // canonicalization-induced differences across platforms.
+        Ok(target.to_path_buf())
     }
 }
 

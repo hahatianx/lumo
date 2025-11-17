@@ -1,6 +1,6 @@
 use crate::err::Result;
 use crate::global_var::LOGGER;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -33,7 +33,7 @@ impl Default for TcpConnConfig {
         Self {
             connect_timeout: Duration::from_secs(5),
             write_timeout: Duration::from_secs(5),
-            read_timeout: Duration::from_secs(5),
+            read_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -122,16 +122,20 @@ impl TcpConn {
 
     /// Convenience to send Bytes.
     pub async fn send_bytes(&mut self, bytes: Bytes) -> Result<()> {
-        self.send_all(&bytes).await
+        self.send_all(&bytes).await?;
+        self.send_all(b"\r\n").await
     }
 
     pub async fn read_bytes(&mut self, len: usize) -> Result<Bytes> {
         if len == 0 {
             return Ok(Bytes::new());
         }
-        let mut buf = vec![0u8; len];
+        let mut buf = BytesMut::with_capacity(len + 5);
+        unsafe {
+            buf.set_len(len + 5);
+        }
         let mut read_total = 0usize;
-        while read_total < len {
+        while read_total < len + 2 {
             let fut = self.stream.read(&mut buf[read_total..]);
             let n = if self.read_timeout.is_zero() {
                 fut.await?
@@ -152,13 +156,20 @@ impl TcpConn {
                 break;
             }
             read_total += n;
+            if read_total >= 2 && buf[read_total - 2] == b'\r' && buf[read_total - 1] == b'\n' {
+                break;
+            }
         }
-        Ok(Bytes::from(buf))
+        if read_total == len + 2 {
+            return Err("Tcp read buffer overflow".into());
+        }
+        buf.truncate(read_total - 2);
+        Ok(buf.freeze())
     }
 
     /// Gracefully shutdown the write half to signal EOF to the remote end.
     pub async fn shutdown(mut self) -> Result<()> {
-        let _ = self.stream.shutdown().await; // ignore error; connection will drop anyway
+        self.stream.shutdown().await?;
         Ok(())
     }
 }

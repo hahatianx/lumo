@@ -15,11 +15,8 @@ pub mod job_genre;
 mod job_heartbeat;
 
 // Re-export claimable job utilities for external modules
-pub use job_genre::claimable_job::{ClaimableJobHandle, launch_claimable_job};
 
 use crate::core::tasks::job_summary::JobStatus;
-pub use job_genre::oneshot_job::launch_oneshot_job;
-pub use job_genre::periodic_job::launch_periodic_job;
 
 // A boxed closure that yields a boxed, pinned Future resolving to Result<()>.
 pub type JobClosure =

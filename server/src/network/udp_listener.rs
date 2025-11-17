@@ -68,13 +68,13 @@ impl UdpListener {
                         match res {
                             Ok((n, peer)) => {
                                 let data = Bytes::copy_from_slice(&buf[..n]);
-                                LOGGER.debug(format!("Received UDP packet from {:?} with length {}", peer, n));
+                                // LOGGER.debug(format!("Received UDP packet from {:?} with length {}", peer, n));
                                 on_packet(data, peer);
                             }
                             Err(_e) => {
                                 // If receiving fails, continue the loop. In real app, consider logging and backoff.
                                 // For minimal implementation, just continue to keep listening.
-                                LOGGER.debug(format!("Failed to receive UDP packet {:?}", _e));
+                                // LOGGER.debug(format!("Failed to receive UDP packet {:?}", _e));
                                 continue;
                             }
                         }

@@ -125,7 +125,7 @@ async fn fs_index_integration_concurrent_events_no_deadlock() {
     let mut paths = Vec::new();
     for i in 0..4 {
         let p = tmp.path().join(format!("c{}.bin", i));
-        write_bytes(&p, 1024 + i * 10, (0x10 + i as u8)).await;
+        write_bytes(&p, 1024 + i * 10, 0x10 + i as u8).await;
         paths.push(p);
     }
 

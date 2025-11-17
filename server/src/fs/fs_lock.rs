@@ -1,13 +1,18 @@
 use crate::err::{Error, Result};
+use crate::fs::util::normalize_path;
+use crate::global_var::LOGGER;
 use fs2::FileExt;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
+use std::io::Seek;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::RwLock as TokioRwLock;
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard};
@@ -22,11 +27,29 @@ pub(crate) struct FileLockGuard {
 
 impl FileLockGuard {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let f = File::open(path.as_ref())?;
+        let f = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path.as_ref())?;
         f.try_lock_exclusive()?;
         Ok(Self { inner: f })
     }
 }
+
+impl Deref for FileLockGuard {
+    type Target = File;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for FileLockGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
 impl Drop for FileLockGuard {
     fn drop(&mut self) {
         // Best-effort cleanup; ignore errors.
@@ -72,7 +95,7 @@ struct InnerState {
     // Tracks active readers in this process
     read_count: AtomicUsize,
     // Holds the system-level exclusive file lock while there is at least one reader
-    sys_guard: Option<FileLockGuard>,
+    sys_guard: Option<Arc<FileLockGuard>>,
 }
 
 // In-process per-path async RWLock registry with system-level exclusivity for the read phase
@@ -123,7 +146,8 @@ pub struct RwLock {
 
 impl RwLock {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
-        let p = path.as_ref();
+        let full_path = normalize_path(path.as_ref().to_str().unwrap()).unwrap();
+        let p = full_path.as_ref();
         let inner = get_or_create_lock(p);
         Self {
             path: p.to_path_buf(),
@@ -145,10 +169,12 @@ impl RwLock {
                 .lock()
                 .map_err(|_| -> Error { "rwlock state poisoned".into() })?;
             if state_guard.read_count.load(Ordering::Acquire) > 0 {
+                let file_lock = state_guard.sys_guard.as_ref().unwrap().clone();
                 state_guard.read_count.fetch_add(1, Ordering::AcqRel);
                 return Ok(ReadGuard {
                     _guard: guard,
                     state: self.inner.clone(),
+                    file_lock,
                 });
             }
         }
@@ -166,17 +192,19 @@ impl RwLock {
             if state_guard.read_count.load(Ordering::Acquire) == 0 {
                 need_first = true;
             } else {
+                let file_lock = state_guard.sys_guard.as_ref().unwrap().clone();
                 state_guard.read_count.fetch_add(1, Ordering::AcqRel);
                 return Ok(ReadGuard {
                     _guard: guard,
                     state: self.inner.clone(),
+                    file_lock,
                 });
             }
         }
 
         if need_first {
             // Acquire the system-level exclusive lock without holding the state mutex
-            let sys = acquire_lock(&self.path).await?;
+            let sys = Arc::new(acquire_lock(&self.path).await?);
             // Install the sys lock and set first reader count
             let mut state_guard = self
                 .inner
@@ -185,14 +213,16 @@ impl RwLock {
                 .map_err(|_| -> Error { "rwlock state poisoned".into() })?;
             // Since we still hold the init mutex, no other first-reader can race us.
             debug_assert_eq!(state_guard.read_count.load(Ordering::Relaxed), 0);
-            state_guard.sys_guard = Some(sys);
+            state_guard.sys_guard = Some(sys.clone());
             state_guard.read_count.store(1, Ordering::Release);
+            return Ok(ReadGuard {
+                _guard: guard,
+                state: self.inner.clone(),
+                file_lock: sys,
+            });
         }
 
-        Ok(ReadGuard {
-            _guard: guard,
-            state: self.inner.clone(),
-        })
+        unreachable!("Do not reach here. Should have returned early")
     }
 
     /// Acquire a write lock. This is exclusive in-process and also guards cross-process
@@ -202,7 +232,7 @@ impl RwLock {
         let guard = self.inner.rw.clone().write_owned().await;
         Ok(WriteGuard {
             _guard: guard,
-            _file_lock: lockfile,
+            file_lock: lockfile,
         })
     }
 }
@@ -212,6 +242,7 @@ impl RwLock {
 pub struct ReadGuard {
     _guard: OwnedRwLockReadGuard<()>,
     state: Arc<PerPathState>,
+    file_lock: Arc<FileLockGuard>,
 }
 
 impl Drop for ReadGuard {
@@ -226,17 +257,39 @@ impl Drop for ReadGuard {
     }
 }
 
+impl Deref for ReadGuard {
+    type Target = File;
+    fn deref(&self) -> &Self::Target {
+        let mut f = &self.file_lock.inner;
+        f.seek(std::io::SeekFrom::Start(0)).unwrap();
+        &self.file_lock.inner
+    }
+}
+
 /// Guard returned by RwLock::write()
 #[derive(Debug)]
 pub struct WriteGuard {
     _guard: OwnedRwLockWriteGuard<()>,
-    _file_lock: FileLockGuard,
+    file_lock: FileLockGuard,
 }
 
-pub trait GuardAccess: Send + Debug {}
+impl Deref for WriteGuard {
+    type Target = File;
+    fn deref(&self) -> &Self::Target {
+        &self.file_lock.inner
+    }
+}
 
-impl GuardAccess for ReadGuard {}
-impl GuardAccess for WriteGuard {}
+impl DerefMut for WriteGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.file_lock.inner
+    }
+}
+
+pub trait LumoFileGuard: Send + Debug + Deref<Target = File> {}
+
+impl LumoFileGuard for ReadGuard {}
+impl LumoFileGuard for WriteGuard {}
 
 #[cfg(test)]
 mod tests {

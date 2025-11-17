@@ -9,7 +9,7 @@ use bytes::Bytes;
 mod consensus;
 pub mod messages;
 use crate::network::protocol::messages::PullMessage;
-use crate::network::protocol::messages::PullResponse;
+use crate::network::protocol::messages::pull_response_message::PullResponseMessage;
 pub use consensus::CUR_LEADER;
 
 pub trait HandleableNetworkProtocol:
@@ -26,6 +26,7 @@ pub fn parse_message(bytes: &Bytes) -> Result<Box<dyn HandleableNetworkProtocol>
                 "HELLO" => Ok(Box::new(HelloMessage::from_tokens(&tokens)?)),
                 "API_REQUEST" => Ok(Box::new(ApiRequestMessage::from_tokens(&tokens)?)),
                 "PULL" => Ok(Box::new(PullMessage::from_tokens(&tokens)?)),
+                "PULL_RESPONSE" => Ok(Box::new(PullResponseMessage::from_tokens(&tokens)?)),
                 _ => unimplemented!(),
             },
             _ => Err(String::from("Unable to parse message because tokens are malformed.").into()),

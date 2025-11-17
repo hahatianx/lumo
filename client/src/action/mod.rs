@@ -1,5 +1,6 @@
 mod conn;
-pub mod list_peers;
-pub mod list_tasks;
-pub mod local_pull_file;
-pub mod pull_file;
+pub(crate) mod list_local_files;
+pub(crate) mod list_peers;
+pub(crate) mod list_tasks;
+pub(crate) mod local_pull_file;
+pub(crate) mod pull_file;

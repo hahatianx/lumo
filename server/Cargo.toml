@@ -7,6 +7,9 @@ build = "build.rs"
 [lib]
 test = true
 
+[features]
+bench = []
+
 [dependencies]
 serde = {  version = "1.0.228", features = ["derive"] }
 tokio = {  version = "1.47.1" , features = ["full"] }
@@ -26,13 +29,21 @@ bincode = { version = "2.0.1", features = ["serde"] }
 aes = "0.8"
 cbc = "0.1"
 sha2 = "0.10"
+age = "0.11.1"
+bech32 = "0.9"
 
 api_model = { path = "../api_model" }
 cli_handler = { path = "../cli_handler" }
 hex = "0.4.3"
+tokio-test = "0.4.4"
 
 [build-dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
 serial_test = "3"
+criterion = { version = "0.5" }
+
+[[bench]]
+name = "crypto_bench"
+harness = false

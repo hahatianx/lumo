@@ -2,13 +2,10 @@ use crate::constants::LOCAL_ADDR;
 use crate::core::tasks::handlers::IGNORE_PEER;
 use crate::core::tasks::{AsyncHandleable, NetworkHandleable};
 use crate::err::Result;
-use crate::global_var::{LOGGER, get_msg_sender};
-use crate::interface::handlers::list_peers::list_peers;
-use crate::interface::handlers::list_tasks::list_tasks;
-use crate::interface::handlers::local_pull_file::local_pull_file;
-use crate::interface::handlers::pull_file::pull_file;
+use crate::global_var::get_msg_sender;
+use crate::interface::handlers::run_handler;
 use crate::network::protocol::HandleableNetworkProtocol;
-use api_model::protocol::message::api_request_message::{ApiRequestKind, ApiRequestMessage};
+use api_model::protocol::message::api_request_message::ApiRequestMessage;
 use api_model::protocol::message::api_response_message::ApiResponseMessage;
 use api_model::protocol::protocol::Protocol;
 use async_trait::async_trait;
@@ -16,25 +13,12 @@ use bytes::Bytes;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::str::FromStr;
 
-async fn run_handler(api_request_kind: &ApiRequestKind) -> Result<Bytes> {
-    let response = match api_request_kind {
-        ApiRequestKind::ListPeers(req) => list_peers(req).await,
-        ApiRequestKind::LocalPullFile(req) => local_pull_file(req).await,
-        ApiRequestKind::ListTasks(req) => list_tasks(req).await,
-        ApiRequestKind::PullFile(req) => pull_file(req).await,
-        _ => return Err(format!("Handler for {:?} not found", api_request_kind).into()),
-    };
-    let vec = ApiResponseMessage { response }.serialize();
-    Ok(Bytes::from(vec))
-}
-
 #[async_trait]
 impl AsyncHandleable for ApiRequestMessage {
     async fn handle(&mut self) -> Result<()> {
-        LOGGER.debug(format!("Received API request: {:?}", self).as_str());
         let response = run_handler(&self.request).await?;
 
-        LOGGER.debug(format!("Sending API response: {:?}", response).as_str());
+        let serialized_bytes = Bytes::from(ApiResponseMessage { response }.serialize());
 
         let sender = get_msg_sender().await?;
         sender
@@ -43,7 +27,7 @@ impl AsyncHandleable for ApiRequestMessage {
                     Ipv4Addr::from_str(LOCAL_ADDR)?,
                     self.from_port,
                 )),
-                response,
+                serialized_bytes,
             )
             .await?;
 

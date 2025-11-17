@@ -57,7 +57,9 @@ impl PullRequest {
 
     pub fn request_time_valid(&self) -> bool {
         let now = SystemTime::now();
-        let diff = now.duration_since(self.time_stamp).unwrap_or(Duration::from_secs(0));
+        let diff = now
+            .duration_since(self.time_stamp)
+            .unwrap_or(Duration::from_secs(0));
         diff.as_secs() < ENV_VAR.get().unwrap().get_pull_task_validity_in_sec()
     }
 

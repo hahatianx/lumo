@@ -43,7 +43,7 @@ impl TableEntry<5, FullPeerTable> for Peer {
         row.insert(1, self.peer_name.clone());
         row.insert(2, self.peer_addr.clone());
         row.insert(3, self.is_main.to_string());
-        row.insert(4, util::readable_format(self.last_seen));
+        row.insert(4, util::system_time_to_human_readable(self.last_seen));
         row
     }
 }

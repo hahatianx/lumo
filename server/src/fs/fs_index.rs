@@ -77,6 +77,7 @@
 use crate::err::Result;
 use crate::fs::LumoFile;
 use crate::fs::fs_op::{fs_read_bytes_deserialized, fs_save_bytes_atomic_internal};
+use crate::fs::util::{get_relative_path, normalize_path};
 use crate::global_var::ENV_VAR;
 use crate::global_var::LOGGER;
 use notify::EventKind;
@@ -94,6 +95,14 @@ use xxhash_rust::xxh64::Xxh64;
 
 static INDEX_FILE_NAME: &'static str = "lumo_index";
 
+#[inline]
+pub(super) fn rel_key_from<P: AsRef<Path>>(p: P) -> PathBuf {
+    let path = p.as_ref();
+    let norm =
+        normalize_path(path.to_str().unwrap_or_default()).unwrap_or_else(|_| path.to_path_buf());
+    get_relative_path(&norm).unwrap_or(norm)
+}
+
 /// A single file entry tracked by the in-memory index.
 ///
 /// Notes:
@@ -108,6 +117,31 @@ pub struct FileEntry {
     version: u64,
 
     last_modified: SystemTime,
+}
+
+pub struct FileEntryDisplay {
+    pub path: String,
+    pub size: u64,
+    pub last_write: String,
+    pub checksum: u64,
+    pub last_modified: SystemTime,
+
+    pub is_active: bool,
+    pub is_stale: bool,
+}
+
+impl From<&FileEntry> for FileEntryDisplay {
+    fn from(value: &FileEntry) -> Self {
+        Self {
+            path: value.file.abs_path().to_string_lossy().to_string(),
+            size: value.file.size,
+            last_write: value.last_writer.clone().unwrap_or_default(),
+            checksum: 0,
+            last_modified: value.file.mtime,
+            is_active: value.is_active,
+            is_stale: value.is_stale,
+        }
+    }
 }
 
 impl Debug for FileEntry {
@@ -137,8 +171,10 @@ impl FileEntry {
     }
 
     fn new_internal(path: PathBuf, last_writer: Option<String>) -> Self {
+        // Store absolute path in LumoFile; use relative only as map key elsewhere
+        let abs_path = normalize_path(path.to_str().unwrap()).unwrap();
         Self {
-            file: LumoFile::new_init(path),
+            file: LumoFile::new_init(abs_path),
             last_writer,
             is_active: true,
             is_stale: true,
@@ -166,7 +202,7 @@ impl FileEntry {
         let err = format!(
             "{}: operation on {} failed because of version bump failure. Expect: {}, found: {}",
             op,
-            self.file.path.display(),
+            self.file.rel_path().display(),
             exp_ver,
             self.version
         );
@@ -295,6 +331,27 @@ impl FileIndexInner {
         }
         s
     }
+
+    pub async fn dump_all_files(&self) -> Result<HashMap<PathBuf, FileEntryDisplay>> {
+        let mut map: HashMap<PathBuf, FileEntryDisplay> = HashMap::new();
+        for (k, v) in &self.map {
+            let entry = &*v.read().await;
+
+            let mut display_entry: FileEntryDisplay = entry.into();
+            match entry.file.get_checksum().await {
+                Ok(checksum) => {
+                    display_entry.checksum = checksum;
+                    display_entry.size = entry.file.size;
+                    display_entry.last_modified = entry.file.mtime;
+                }
+                Err(_) => {}
+            }
+
+            map.insert(k.clone(), display_entry);
+        }
+
+        Ok(map)
+    }
 }
 
 /// Async-ready index of files with secondary indices to help find same-file candidates.
@@ -326,7 +383,7 @@ impl FileIndex {
     where
         P: AsRef<Path>,
     {
-        let p = path.as_ref().to_path_buf();
+        let p = rel_key_from(path);
         let arc = {
             let guard = self.inner.read().await;
             guard.map.get(&p).cloned()
@@ -342,7 +399,7 @@ impl FileIndex {
     /// Get the latest checksum for the file at `path` if it's indexed.
     /// Returns `None` if the path is not in the index; otherwise returns the checksum computation Result.
     pub async fn get_latest_checksum<P: AsRef<Path>>(&self, path: P) -> Result<Option<u64>> {
-        let p = path.as_ref().to_path_buf();
+        let p = rel_key_from(path);
         let arc = {
             let guard = self.inner.read().await;
             guard.map.get(&p).cloned()
@@ -400,6 +457,10 @@ impl FileIndex {
         let guard = self.inner.read().await;
         guard.debug().await
     }
+
+    pub async fn dump_all_files(&self) -> Result<HashMap<PathBuf, FileEntryDisplay>> {
+        self.inner.read().await.dump_all_files().await
+    }
 }
 
 /// Mutating APIs of FileIndex
@@ -408,7 +469,7 @@ impl FileIndex {
     /// Insert or replace the entry for the file's path.
     /// Make sure entry.is_active is always true
     async fn upsert(&self, entry: FileEntry) {
-        let key = entry.file.path.clone();
+        let key = entry.file.rel_path();
         let size = entry.file.size;
         let mtime = entry.file.mtime;
         let version = entry.version;
@@ -433,15 +494,22 @@ impl FileIndex {
         from_ver: u64,
         entry: FileEntry,
     ) -> Result<()> {
-        let p = path.as_ref().to_path_buf();
+        let p = normalize_path(path.as_ref().to_str().unwrap_or_default())?;
+        let rel_path = get_relative_path(&p)?;
 
         let arc_opt = {
             let guard = self.inner.read().await;
-            guard.map.get(&p).cloned()
+            guard.map.get(&rel_path).cloned()
         };
         let Some(arc) = arc_opt else {
-            LOGGER.warn(format!("refresh_on: path not found in index: {}", p.display()).as_str());
-            return Err(format!("path not found in index: {}", p.display()).into());
+            LOGGER.warn(
+                format!(
+                    "refresh_on: path not found in index: {}",
+                    rel_path.display()
+                )
+                .as_str(),
+            );
+            return Err(format!("path not found in index: {}", rel_path.display()).into());
         };
 
         {
@@ -452,10 +520,10 @@ impl FileIndex {
         }
 
         let mut guard = self.inner.write().await;
-        if let Some(curr_arc) = guard.map.get(&p) {
+        if let Some(curr_arc) = guard.map.get(&rel_path) {
             let ver_ok = guard
                 .active_version
-                .get(&p)
+                .get(&rel_path)
                 .map(|v| *v == from_ver)
                 .unwrap_or(false);
             if Arc::ptr_eq(&arc, curr_arc) && ver_ok {
@@ -466,7 +534,7 @@ impl FileIndex {
                 let version = from_ver + 1;
                 let arc_entry = Arc::new(AsyncRwLock::new(entry));
                 arc_entry.write().await.version = version;
-                let key = p.clone();
+                let key = rel_path.clone();
                 if let Some((old_size, old_mtime)) = guard.meta.remove(&key) {
                     guard.remove_indices(&key, old_size, old_mtime);
                 }
@@ -486,12 +554,12 @@ impl FileIndex {
     /// Remove an entry by path with expected version. Returns true if an entry was removed.
     /// Remember to update active_versions
     async fn remove_checked<P: AsRef<Path>>(&self, path: P, from_ver: u64) -> Result<bool> {
-        let p = path.as_ref().to_path_buf();
+        let key = rel_key_from(path);
 
         // Step 1: grab current arc (if any) without holding the map write lock
         let arc_opt = {
             let guard = self.inner.read().await;
-            guard.map.get(&p).cloned()
+            guard.map.get(&key).cloned()
         };
         let Some(arc) = arc_opt else {
             return Ok(false);
@@ -510,30 +578,30 @@ impl FileIndex {
         // Step 3: remove entry and all auxiliary indices under a single write lock,
         // but only if the map still points to the same Arc and the active version matches.
         let mut guard = self.inner.write().await;
-        if let Some(curr_arc) = guard.map.get(&p) {
+        if let Some(curr_arc) = guard.map.get(&key) {
             // race detection: arc identity and version
             let ver_ok = guard
                 .active_version
-                .get(&p)
+                .get(&key)
                 .map(|v| *v == from_ver)
                 .unwrap_or(false);
             if Arc::ptr_eq(&arc, curr_arc) && ver_ok {
                 // remove from indices/meta caches first (need old size/mtime)
-                if let Some((size, mtime)) = guard.meta.remove(&p) {
-                    guard.remove_indices(&p, size, mtime);
+                if let Some((size, mtime)) = guard.meta.remove(&key) {
+                    guard.remove_indices(&key, size, mtime);
                 }
                 // remove active caches
-                guard.active_paths.remove(&p);
-                guard.active_version.remove(&p);
+                guard.active_paths.remove(&key);
+                guard.active_version.remove(&key);
                 // finally remove from main map
-                guard.map.remove(&p);
+                guard.map.remove(&key);
                 return Ok(true);
             }
         }
 
         let msg = format!(
             "[fs_index] remove: entry of {} was changed before commit (race detected)",
-            p.display()
+            key.display()
         );
         LOGGER.warn(&msg);
         Err(msg.into())
@@ -541,18 +609,18 @@ impl FileIndex {
 
     /// Mark a path as stale (needing rescan).
     async fn mark_stale_checked<P: AsRef<Path>>(&self, path: P, from_ver: u64) -> Result<()> {
-        let p = path.as_ref().to_path_buf();
+        let key = rel_key_from(path);
         // Step 1: get the Arc for the entry under a read lock and drop the lock before awaiting
         let arc = {
             let guard = self.inner.read().await;
-            guard.map.get(&p).cloned()
+            guard.map.get(&key).cloned()
         };
 
         // Step 2: mark the entry stale by locking the entry itself
         let arc = if let Some(arc) = arc {
             arc
         } else {
-            return Err(format!("path not found in index: {}", p.display()).into());
+            return Err(format!("path not found in index: {}", key.display()).into());
         };
         let new_ver = {
             let mut e = arc.write().await;
@@ -561,30 +629,30 @@ impl FileIndex {
 
         // Step 3: before updating active_version, validate that the map still points to the same Arc
         let mut guard = self.inner.write().await;
-        if let Some(curr_arc) = guard.map.get(&p) {
+        if let Some(curr_arc) = guard.map.get(&key) {
             if Arc::ptr_eq(&arc, curr_arc) {
-                guard.active_version.insert(p, new_ver);
+                guard.active_version.insert(key, new_ver);
                 return Ok(());
             }
         }
 
         let msg = format!(
             "[fs_index] mark stale: entry of {} was changed before commit",
-            p.display()
+            key.display()
         );
         LOGGER.warn(&msg);
         Err(msg.into())
     }
 
     async fn activate_checked<P: AsRef<Path>>(&self, path: P, from_ver: u64) -> Result<()> {
-        let p = path.as_ref().to_path_buf();
+        let key = rel_key_from(path);
         // Step 1: get Arc under read lock
         let arc = {
             let guard = self.inner.read().await;
-            guard.map.get(&p).cloned()
+            guard.map.get(&key).cloned()
         };
         let Some(arc) = arc else {
-            return Err(format!("path not found in index: {}", p.display()).into());
+            return Err(format!("path not found in index: {}", key.display()).into());
         };
         // Step 2: mutate entry
         let new_ver = {
@@ -593,30 +661,30 @@ impl FileIndex {
         };
         // Step 3: commit caches if still same Arc
         let mut guard = self.inner.write().await;
-        if let Some(curr_arc) = guard.map.get(&p) {
+        if let Some(curr_arc) = guard.map.get(&key) {
             if Arc::ptr_eq(&arc, curr_arc) {
-                guard.active_paths.insert(p.clone());
-                guard.active_version.insert(p, new_ver);
+                guard.active_paths.insert(key.clone());
+                guard.active_version.insert(key, new_ver);
                 return Ok(());
             }
         }
         let msg = format!(
             "[fs_index] activate: entry of {} was changed before commit",
-            p.display()
+            key.display()
         );
         LOGGER.warn(&msg);
         Err(msg.into())
     }
 
     async fn deactivate_checked<P: AsRef<Path>>(&self, path: P, from_ver: u64) -> Result<()> {
-        let p = path.as_ref().to_path_buf();
+        let key = rel_key_from(path);
         // Step 1: get Arc under read lock
         let arc = {
             let guard = self.inner.read().await;
-            guard.map.get(&p).cloned()
+            guard.map.get(&key).cloned()
         };
         let Some(arc) = arc else {
-            return Err(format!("path not found in index: {}", p.display()).into());
+            return Err(format!("path not found in index: {}", key.display()).into());
         };
         // Step 2: mutate entry
         let new_ver = {
@@ -625,16 +693,16 @@ impl FileIndex {
         };
         // Step 3: commit caches if still same Arc
         let mut guard = self.inner.write().await;
-        if let Some(curr_arc) = guard.map.get(&p) {
+        if let Some(curr_arc) = guard.map.get(&key) {
             if Arc::ptr_eq(&arc, curr_arc) {
-                guard.active_paths.remove(&p);
-                guard.active_version.insert(p, new_ver);
+                guard.active_paths.remove(&key);
+                guard.active_version.insert(key, new_ver);
                 return Ok(());
             }
         }
         let msg = format!(
             "[fs_index] deactivate: entry of {} was changed before commit",
-            p.display()
+            key.display()
         );
         LOGGER.warn(&msg);
         Err(msg.into())
@@ -646,14 +714,14 @@ impl FileIndex {
         from_ver: u64,
         writer: String,
     ) -> Result<()> {
-        let p = path.as_ref().to_path_buf();
+        let key = rel_key_from(path);
         // Step 1: get Arc under read lock
         let arc = {
             let guard = self.inner.read().await;
-            guard.map.get(&p).cloned()
+            guard.map.get(&key).cloned()
         };
         let Some(arc) = arc else {
-            return Err(format!("path not found in index: {}", p.display()).into());
+            return Err(format!("path not found in index: {}", key.display()).into());
         };
         // Step 2: mutate entry
         let new_ver = {
@@ -662,15 +730,15 @@ impl FileIndex {
         };
         // Step 3: commit if still same Arc
         let mut guard = self.inner.write().await;
-        if let Some(curr_arc) = guard.map.get(&p) {
+        if let Some(curr_arc) = guard.map.get(&key) {
             if Arc::ptr_eq(&arc, curr_arc) {
-                guard.active_version.insert(p, new_ver);
+                guard.active_version.insert(key, new_ver);
                 return Ok(());
             }
         }
         let msg = format!(
             "[fs_index] set_last_writer: entry of {} was changed before commit",
-            p.display()
+            key.display()
         );
         LOGGER.warn(&msg);
         Err(msg.into())
@@ -680,54 +748,54 @@ impl FileIndex {
 // Public wrappers delegating to version-checked internals expected by tests
 impl FileIndex {
     async fn remove<P: AsRef<Path>>(&self, p: P) -> bool {
-        let path: &Path = p.as_ref();
-        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        let key = rel_key_from(&p);
+        let v_opt = { self.inner.read().await.active_version.get(&key).copied() };
         match v_opt {
-            Some(v) => self.remove_checked(path, v).await.unwrap_or(false),
+            Some(v) => self.remove_checked(&key, v).await.unwrap_or(false),
             None => false,
         }
     }
 
     async fn activate<P: AsRef<Path>>(&self, p: P) -> Result<()> {
-        let path: &Path = p.as_ref();
-        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        let key = rel_key_from(&p);
+        let v_opt = { self.inner.read().await.active_version.get(&key).copied() };
         match v_opt {
-            Some(v) => self.activate_checked(path, v).await,
-            None => Err(format!("path not found in index: {}", path.display()).into()),
+            Some(v) => self.activate_checked(&key, v).await,
+            None => Err(format!("path not found in index: {}", key.display()).into()),
         }
     }
 
     async fn deactivate<P: AsRef<Path>>(&self, p: P) -> Result<()> {
-        let path: &Path = p.as_ref();
-        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        let key = rel_key_from(&p);
+        let v_opt = { self.inner.read().await.active_version.get(&key).copied() };
         match v_opt {
-            Some(v) => self.deactivate_checked(path, v).await,
-            None => Err(format!("path not found in index: {}", path.display()).into()),
+            Some(v) => self.deactivate_checked(&key, v).await,
+            None => Err(format!("path not found in index: {}", key.display()).into()),
         }
     }
 
     async fn mark_stale<P: AsRef<Path>>(&self, p: P) -> Result<()> {
-        let path: &Path = p.as_ref();
-        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        let key = rel_key_from(&p);
+        let v_opt = { self.inner.read().await.active_version.get(&key).copied() };
         match v_opt {
-            Some(v) => self.mark_stale_checked(path, v).await,
-            None => Err(format!("path not found in index: {}", path.display()).into()),
+            Some(v) => self.mark_stale_checked(&key, v).await,
+            None => Err(format!("path not found in index: {}", key.display()).into()),
         }
     }
 
     async fn set_last_writer<P: AsRef<Path>>(&self, p: P, writer: impl Into<String>) {
-        let path: &Path = p.as_ref();
+        let key = rel_key_from(&p);
         let writer: String = writer.into();
-        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        let v_opt = { self.inner.read().await.active_version.get(&key).copied() };
         match v_opt {
             Some(v) => {
-                let _ = self.set_last_writer_checked(path, v, writer).await;
+                let _ = self.set_last_writer_checked(&key, v, writer).await;
             }
             None => {
                 LOGGER.warn(
                     format!(
                         "set_last_writer: path not found in index: {}",
-                        path.display()
+                        key.display()
                     )
                     .as_str(),
                 );
@@ -759,19 +827,19 @@ impl FileIndex {
 ///
 impl FileIndex {
     async fn on_add<P: AsRef<Path>>(&self, p: P, lf: LumoFile) -> Result<()> {
-        let path: &Path = p.as_ref();
-        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        let key = rel_key_from(&p);
+        let v_opt = { self.inner.read().await.active_version.get(&key).copied() };
         let entry = FileEntry::new(lf)
             .with_last_writer(ENV_VAR.get().unwrap().get_machine_name())
             .with_active(true)
             .with_stale(false);
         match v_opt {
             Some(v) => {
-                LOGGER.trace(format!("on_add: refreshing '{}'", path.display()));
-                self.refresh_on_checked(path, v, entry).await?;
+                LOGGER.trace(format!("on_add: refreshing '{}'", key.display()));
+                self.refresh_on_checked(&key, v, entry).await?;
             }
             None => {
-                LOGGER.trace(format!("on_add: upsert '{}'", path.display()));
+                LOGGER.trace(format!("on_add: upsert '{}'", key.display()));
                 self.upsert(entry).await;
             }
         }
@@ -779,15 +847,15 @@ impl FileIndex {
     }
 
     async fn on_remove<P: AsRef<Path>>(&self, p: P) -> Result<()> {
-        let path: &Path = p.as_ref();
-        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        let key = rel_key_from(&p);
+        let v_opt = { self.inner.read().await.active_version.get(&key).copied() };
         match v_opt {
             Some(v) => {
-                self.remove_checked(path, v).await?;
+                self.remove_checked(&key, v).await?;
                 Ok(())
             }
             None => {
-                let msg = format!("on_remove: path not found in index: {}", path.display());
+                let msg = format!("on_remove: path not found in index: {}", key.display());
                 LOGGER.warn(&msg);
                 Err(msg.into())
             }
@@ -795,17 +863,17 @@ impl FileIndex {
     }
 
     async fn on_modify_content<P: AsRef<Path>>(&self, p: P) -> Result<()> {
-        let path: &Path = p.as_ref();
-        let v_opt = { self.inner.read().await.active_version.get(path).copied() };
+        let key = rel_key_from(&p);
+        let v_opt = { self.inner.read().await.active_version.get(&key).copied() };
         match v_opt {
             Some(v) => {
-                self.mark_stale_checked(path, v).await?;
+                self.mark_stale_checked(&key, v).await?;
                 Ok(())
             }
             None => {
                 let msg = format!(
                     "on_modify_content: path not found in index: {}",
-                    path.display()
+                    key.display()
                 );
                 LOGGER.warn(&msg);
                 Err(msg.into())
@@ -819,7 +887,7 @@ impl FileIndex {
             Ok(lf) => {
                 // Case 1: found a file
                 match ek {
-                    EventKind::Create(_) => self.on_add(p, lf).await,
+                    EventKind::Create(_) => self.on_add(&p, lf).await,
                     EventKind::Remove(_) => Err(format!(
                         "Ignore removing event as it comes from event disorder: {}",
                         p.as_ref().display()
@@ -827,9 +895,9 @@ impl FileIndex {
                     .into()),
                     EventKind::Modify(ModifyKind::Name(_)) => {
                         // Case 1.1: file name changed: treat it as move
-                        self.on_add(p, lf).await
+                        self.on_add(&p, lf).await
                     }
-                    EventKind::Modify(ModifyKind::Data(_)) => self.on_modify_content(p).await,
+                    EventKind::Modify(ModifyKind::Data(_)) => self.on_modify_content(&p).await,
                     _ => {
                         LOGGER.debug(
                             format!("Ignore event {:?} from  {}", ek, p.as_ref().display())
@@ -846,7 +914,7 @@ impl FileIndex {
                     p.as_ref().display(),
                     e
                 ));
-                self.on_remove(p).await
+                self.on_remove(&p).await
             }
         }
     }
@@ -992,7 +1060,8 @@ impl FileIndex {
                 continue;
             }
             vecs.push(SerializedFileEntry {
-                path: path.clone(),
+                // store absolute path in serialized records
+                path: _arc_guard.lumo_file().abs_path(),
                 last_writer: _arc_guard.last_writer.clone(),
             });
         }
@@ -1057,14 +1126,14 @@ impl FileIndex {
         match last_checksum {
             Some(last_checksum) => {
                 if last_checksum == checksum {
-                    LOGGER.trace("[index dump] no change, skipping");
+                    // LOGGER.trace("[index dump] no change, skipping");
                     return Ok(checksum);
                 }
             }
             None => {}
         }
 
-        LOGGER.trace(format!("[index dump] writing to {}", target.display()));
+        // LOGGER.trace(format!("[index dump] writing to {}", target.display()));
         fs_save_bytes_atomic_internal(&target, &bytes).await?;
 
         Ok(checksum)
@@ -1141,14 +1210,16 @@ mod tests {
 
         {
             let _guard = index.inner.read().await;
-            assert!(_guard.map.contains_key(&p1));
-            assert!(_guard.map.contains_key(&p2));
+            let rp1 = rel_key_from(&p1);
+            let rp2 = rel_key_from(&p2);
+            assert!(_guard.map.contains_key(&rp1));
+            assert!(_guard.map.contains_key(&rp2));
             assert_eq!(index.len().await, 2);
         }
 
         let mut paths = index.list_paths().await;
         paths.sort();
-        let mut expected = vec![p1.clone(), p2.clone()];
+        let mut expected = vec![rel_key_from(&p1), rel_key_from(&p2)];
         expected.sort();
         assert_eq!(paths, expected);
 
@@ -1184,14 +1255,14 @@ mod tests {
 
         let mut candidates = index.candidates_by_size(4096).await;
         candidates.sort();
-        let mut expected = vec![p1.clone(), p2.clone()];
+        let mut expected = vec![rel_key_from(&p1), rel_key_from(&p2)];
         expected.sort();
         assert_eq!(candidates, expected);
 
         // Remove one and ensure indices updated
         assert!(index.remove(&p1).await);
         let candidates_after = index.candidates_by_size(4096).await;
-        assert_eq!(candidates_after, vec![p2.clone()]);
+        assert_eq!(candidates_after, vec![rel_key_from(&p2)]);
 
         // Removing again returns false
         assert!(!index.remove(&p1).await);
@@ -1227,7 +1298,7 @@ mod tests {
         let mut by_size = index.candidates_by_size(size2).await;
         by_size.sort();
         assert_eq!(by_size, {
-            let mut v = vec![p1.clone(), p2.clone()];
+            let mut v = vec![rel_key_from(&p1), rel_key_from(&p2)];
             v.sort();
             v
         });
@@ -1235,7 +1306,7 @@ mod tests {
         let mut by_sm = index.candidates_by_size_mtime(size2, mtime2).await;
         by_sm.sort();
         assert_eq!(by_sm, {
-            let mut v = vec![p1.clone(), p2.clone()];
+            let mut v = vec![rel_key_from(&p1), rel_key_from(&p2)];
             v.sort();
             v
         });
@@ -1245,7 +1316,7 @@ mod tests {
             .await;
         for_f2.sort();
         assert_eq!(for_f2, {
-            let mut v = vec![p1.clone(), p2.clone()];
+            let mut v = vec![rel_key_from(&p1), rel_key_from(&p2)];
             v.sort();
             v
         });
@@ -1567,7 +1638,7 @@ mod more_fs_index_concurrency_tests {
         {
             let arc_opt = {
                 let guard = index.inner.read().await;
-                guard.map.get(&p).cloned()
+                guard.map.get(&rel_key_from(&p)).cloned()
             };
             let arc = arc_opt.expect("entry must exist");
             let mut e = arc.write().await;

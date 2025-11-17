@@ -75,10 +75,14 @@ impl AsyncLogger {
     /// Log a message at a specific level.
     fn log<S: Into<String>>(&self, level: LogLevel, msg: S) {
         let str_msg = msg.into();
+        let for_error = str_msg.clone();
         match self.tx.try_send(LogRecord::new(level, str_msg)) {
             Ok(_) => {}
             Err(err) => {
-                eprintln!("Failed to send log message: {}", err);
+                eprintln!(
+                    "Failed to send log message: {}, message: {}",
+                    err, for_error
+                );
             }
         }
     }
@@ -201,7 +205,7 @@ impl Deref for Logger {
         if let Some(l) = LOGGER_CELL.get() {
             return l;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "bench"))]
         {
             // In test builds, lazily install a fallback no-op logger so unit tests
             // can call LOGGER.*() without panicking even if the logger was not
@@ -217,7 +221,7 @@ impl Deref for Logger {
 }
 
 // A tiny, self-contained helper to avoid pulling chrono; build time is a best-effort.
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 fn test_fallback_logger() -> AsyncLogger {
     // Create a channel and leak the receiver to keep it alive without a runtime.
     let (tx, rx) = mpsc::channel::<LogRecord>(1024);

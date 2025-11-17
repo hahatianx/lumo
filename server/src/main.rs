@@ -3,7 +3,7 @@ use crate::config::{EnvVar, Opts, get_or_create_config};
 use crate::core::init_topology;
 use crate::core::tasks::init_jobs;
 use crate::err::Result;
-use crate::fs::{FS_INDEX, init_fs, init_working_dir};
+use crate::fs::{init_fs, init_working_dir};
 use crate::global_var::{ENV_VAR, GLOBAL_VAR, GlobalVar, LOGGER, LOGGER_CELL};
 use crate::network::{init_network, terminate_network};
 use core::tasks::{init_task_queue, shutdown_core};
@@ -133,9 +133,7 @@ async fn run_server() {
         //
         // println!("JOB LIST: {:?}", JOB_TABLE);
 
-        LOGGER.info(FS_INDEX.debug().await);
-
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(100)).await;
     }
 }
 

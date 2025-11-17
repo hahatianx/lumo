@@ -51,7 +51,7 @@ where
             // Do not
             match (self.job)().await {
                 Ok(()) => {
-                    LOGGER.debug(format!("Job {} completed successfully.", &self.job_name));
+                    // LOGGER.debug(format!("Job {} completed successfully.", &self.job_name));
                 }
                 Err(job_err) => {
                     // We don't want a single job execution failure to crash the periodic job runs.
