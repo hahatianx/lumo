@@ -1,12 +1,13 @@
 mod action;
 mod cli;
 mod error;
+mod format;
 
+use crate::cli::file::FileCommands;
 use crate::cli::local_file::LocalFileCommands;
 use crate::cli::peer::PeerCommands;
 use crate::cli::task::TaskCommands;
 use clap::{Parser, Subcommand};
-use crate::cli::file::FileCommands;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -32,7 +33,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommands,
     },
-    #[command(name = "local-file", about = "File related commands (local debug only)")]
+    #[command(
+        name = "local-file",
+        about = "File related commands (local debug only)"
+    )]
     LocalFile {
         #[command(subcommand)]
         command: LocalFileCommands,
@@ -41,7 +45,7 @@ pub enum Commands {
     File {
         #[command(subcommand)]
         command: FileCommands,
-    }
+    },
 }
 
 fn main() {

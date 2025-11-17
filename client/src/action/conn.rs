@@ -36,6 +36,10 @@ impl Connection {
             .set_nonblocking(false)
             .map_err(|e| ClientError::ConnectionBindError(String::from(""), e.to_string()))?;
 
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .map_err(|e| ClientError::ConnectionBindError(String::from(""), e.to_string()))?;
+
         match config {
             Some(c) => Ok(Self {
                 udp_socket: socket,
@@ -107,4 +111,17 @@ impl Connection {
         let response = self.receive_response()?;
         Ok(response.response)
     }
+}
+
+#[macro_export]
+macro_rules! extract_response {
+    ($response:expr, $variant:path) => {
+        match $response {
+            $variant(res) => Ok(res),
+            _ => Err(ClientError::ResponseParseError(
+                format!("Expected {}", stringify!($variant)),
+                String::new(),
+            )),
+        }
+    };
 }

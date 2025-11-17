@@ -328,6 +328,7 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "api_model",
+ "chrono",
  "clap 4.5.51",
  "cli_handler",
 ]

@@ -17,6 +17,19 @@ pub enum JobStatus {
     Shutdown,
 }
 
+impl Into<api_model::protocol::models::task::task::JobStatus> for JobStatus {
+    fn into(self) -> api_model::protocol::models::task::task::JobStatus {
+        match self {
+            JobStatus::Running => api_model::protocol::models::task::task::JobStatus::Running,
+            JobStatus::Completed => api_model::protocol::models::task::task::JobStatus::Completed,
+            JobStatus::Failed => api_model::protocol::models::task::task::JobStatus::Failed,
+            JobStatus::TimedOut => api_model::protocol::models::task::task::JobStatus::TimedOut,
+            JobStatus::Pending => api_model::protocol::models::task::task::JobStatus::Pending,
+            JobStatus::Shutdown => api_model::protocol::models::task::task::JobStatus::Shutdown,
+        }
+    }
+}
+
 impl Display for JobStatus {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -35,6 +48,16 @@ pub enum JobType {
     Periodic,
     OneTime,
     Claimable,
+}
+
+impl Into<api_model::protocol::models::task::task::JobType> for JobType {
+    fn into(self) -> api_model::protocol::models::task::task::JobType {
+        match self {
+            JobType::Periodic => api_model::protocol::models::task::task::JobType::Periodic,
+            JobType::OneTime => api_model::protocol::models::task::task::JobType::OneTime,
+            JobType::Claimable => api_model::protocol::models::task::task::JobType::Claimable,
+        }
+    }
 }
 
 impl Display for JobType {

@@ -18,7 +18,12 @@ pub async fn get_job_fs_pull_initiate_closure(
     from_checksum: Expected<Checksum>,
     to_checksum: Expected<Checksum>,
 ) -> Result<Box<JobClosure>> {
-    let target_addr: std::net::SocketAddr = peer.peer_addr.to_string().parse().unwrap();
+    let target_addr: std::net::SocketAddr = peer.peer_addr.to_string().parse().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Invalid peer address: {}", e),
+        )
+    })?;
     let file_path_buf = PathBuf::from(file_path);
     let closure = move || {
         // This is not efficient in terms of memory usage, but it's fine for now.

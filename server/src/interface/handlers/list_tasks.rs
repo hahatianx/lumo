@@ -28,12 +28,12 @@ pub async fn list_tasks(_request: &ListTasksRequest) -> Result<ListTasksResponse
                 job_id,
                 job_name,
                 summary,
-                launch_time: launched_time.timestamp() as u64,
-                complete_time: complete_time.map(|t| t.timestamp() as u64),
-                status: status.to_string(),
+                launch_time: launched_time.into(),
+                complete_time: complete_time.map(|t| t.into()),
+                status: status.into(),
                 status_message: status_msg,
-                job_type: job_type.to_string(),
-                period: Some(0),
+                job_type: job_type.into(),
+                period: period.map(|p| p.num_seconds() as u64),
             }
         })
         .collect();
