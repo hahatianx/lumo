@@ -10,7 +10,7 @@ fn ensure_env() -> TmpDirGuard {
     use server::config::{Config, EnvVar};
     use server::global_var::ENV_VAR;
 
-    let tmp_dir = std::env::temp_dir().join("age-bench");
+    let tmp_dir = PathBuf::from("D://SharedDisc/test").join("age-bench");
     let _ = std::fs::create_dir_all(&tmp_dir);
     let guard = TmpDirGuard::from(tmp_dir.clone());
     if ENV_VAR.get().is_none() {
@@ -35,8 +35,8 @@ fn bench_encrypt_decrypt(c: &mut Criterion) {
     let iv = [0xABu8; 16];
 
     for &sz in &sizes {
-        let label_enc = format!("encrypt_{}B", sz);
-        let label_dec = format!("decrypt_{}B", sz);
+        let label_enc = format!("encrypt_{}_{}B", ENV_VAR.get().unwrap().get_working_dir(), sz);
+        let label_dec = format!("decrypt_{}_{}B", ENV_VAR.get().unwrap().get_working_dir(), sz);
         let data = vec![0x55u8; sz];
         let data_bytes = Bytes::from(data);
 
@@ -78,12 +78,11 @@ fn bench_encrypt_decrypt_file(c: &mut Criterion) {
         1024usize,
         1024 * 1024,
         100 * 1024 * 1024,
-        // 1024 * 1024 * 1024, Too much damage to my SSD :(
+        1024 * 1024 * 1024, // Too much damage to my SSD :(
     ];
     const BAR: usize = 1024 * 1024 + 1;
     for &sz in &sizes {
-        let label_enc = format!("encrypt_file_{}", format_sz(sz));
-        let label_dec = format!("decrypt_file_{}", format_sz(sz));
+        let label_enc = format!("encrypt_file_{}_{}", ENV_VAR.get().unwrap().get_working_dir(), format_sz(sz));
 
         let tmp_f = PathBuf::from(ENV_VAR.get().unwrap().get_working_dir())
             .join(format!("bench-file-{}B", sz));

@@ -170,8 +170,10 @@ pub async fn f_to_encryption<P: AsRef<Path>>(
     let outfile = OpenOptions::new().write(true).create_new(true).open(to)?;
     let mut writer = encryptor.wrap_output(BufWriter::new(outfile))?;
 
+    LOGGER.trace(format!("Encrypting {} to {}", from.display(), to.display()).as_str());
     std::io::copy(&mut reader, &mut writer)?;
     writer.finish()?;
+    LOGGER.trace(format!("Completed encrypting {} to {}", from.display(), to.display()).as_str());
     Ok(())
 }
 
