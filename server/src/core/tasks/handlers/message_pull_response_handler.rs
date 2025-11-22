@@ -1,5 +1,6 @@
 use crate::constants::TCP_FILE_PORT;
-use crate::core::protocol::file_recv::FileRecvTracker;
+use crate::core::protocol::file_recv::{FileRecvSummary, FileRecvTracker};
+use crate::core::protocol::file_send::FileSendSummary;
 use crate::core::protocol::file_sync::FileSyncError;
 use crate::core::tasks::handlers::IGNORE_SELF;
 use crate::core::tasks::{AsyncHandleable, JobStatus, NetworkHandleable};
@@ -10,6 +11,7 @@ use crate::network::TcpConn;
 use crate::network::protocol::messages::pull_response_message::{
     PullDecision, PullResponseMessage,
 };
+use crate::utilities::format::size_to_human_readable;
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::net::{IpAddr, SocketAddr};
@@ -46,7 +48,7 @@ impl PullResponseMessage {
         pending_file_download: &PendingFileDownloadTask,
         decision: PullDecision,
         conn: TcpConn,
-    ) -> std::result::Result<(), DownloadFileError> {
+    ) -> std::result::Result<FileRecvSummary, DownloadFileError> {
         let nonce = match decision {
             PullDecision::Accept(c, n) => n,
             PullDecision::Reject(c, r) => {
@@ -61,7 +63,7 @@ impl PullResponseMessage {
         let to_checksum = pending_file_download.to_checksum;
 
         let file_download_tracker = FileRecvTracker::new(nonce, to_checksum.into());
-        let res_path = file_download_tracker
+        let summary = file_download_tracker
             .recv(conn)
             .await
             .map_err(|e| match e {
@@ -108,11 +110,11 @@ impl PullResponseMessage {
 
             LOGGER.debug(format!(
                 "Moving {} to {}",
-                res_path.display(),
+                &summary.file_path.display(),
                 pending_file_download.file_path.display()
             ));
 
-            tokio::fs::rename(&res_path, &pending_file_download.file_path)
+            tokio::fs::rename(&summary.file_path, &pending_file_download.file_path)
                 .await
                 .map_err(|e| {
                     DownloadFileError::SystemError(format!("Failed to rename file: {:?}", e))
@@ -123,18 +125,16 @@ impl PullResponseMessage {
                 pending_file_download.file_path.display()
             ));
         } else {
-            LOGGER.debug(format!(
-                "QAQ Moving {} to {}",
-                res_path.display(),
-                pending_file_download.file_path.display()
-            ));
-            crate::utilities::disk_op::fs_rename(res_path, &pending_file_download.file_path)
-                .map_err(|e| {
-                    DownloadFileError::SystemError(format!("Failed to rename file: {:?}", e))
-                })?;
+            crate::utilities::disk_op::fs_rename(
+                &summary.file_path,
+                &pending_file_download.file_path,
+            )
+            .map_err(|e| {
+                DownloadFileError::SystemError(format!("Failed to rename file: {:?}", e))
+            })?;
         }
 
-        Ok(())
+        Ok(summary)
     }
 
     async fn process_file_download(&self, decision: PullDecision) -> crate::err::Result<()> {
@@ -185,14 +185,24 @@ impl PullResponseMessage {
 
         // 3. Download and replace the file
         match self.download_and_replace(&pending, decision, conn).await {
-            Ok(_) => {
+            Ok(summary) => {
                 LOGGER.info(format!(
                     "File downloaded successfully for challenge {},",
                     challenge
                 ));
+                let download_speed = size_to_human_readable(
+                    (summary.file_size as f64 / summary.download_time.as_secs_f64()) as u64,
+                );
+                let decrypt_speed = size_to_human_readable(
+                    (summary.file_size as f64 / summary.decrypt_time.as_secs_f64()) as u64,
+                );
+                let msg = format!(
+                    "File downloaded successfully, file size: {}, download speed: {}, decrypt speed: {}",
+                    summary.file_size, download_speed, decrypt_speed
+                );
                 callback(
                     JobStatus::Completed,
-                    String::from("File download completed."),
+                    msg,
                 )
                 .await?;
             }

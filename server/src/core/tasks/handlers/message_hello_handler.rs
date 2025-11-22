@@ -3,7 +3,7 @@ use crate::core::tasks::handlers::IGNORE_SELF;
 use crate::core::tasks::{AsyncHandleable, NetworkHandleable};
 use crate::core::topology::Peer;
 use crate::err::Result;
-use crate::global_var::get_msg_sender;
+use crate::global_var::{LOGGER, get_msg_sender};
 use crate::network::protocol::messages::HelloMessage;
 use crate::network::protocol::messages::hello_message::HelloMode;
 use api_model::protocol::protocol::Protocol;
@@ -15,7 +15,7 @@ use std::str::FromStr;
 #[async_trait]
 impl AsyncHandleable for HelloMessage {
     async fn handle(&mut self) -> Result<()> {
-        // LOGGER.debug(format!("HelloMessage: {:?}", self));
+        LOGGER.debug(format!("HelloMessage: {:?}", self));
         update_peer_table(&self).await?;
 
         if self.mode.is_request_reply() {

@@ -7,9 +7,28 @@ use crate::utilities::crypto::f_to_encryption;
 use bytes::Bytes;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
+use tokio::time::error::Elapsed;
 
 type Nonce = u64;
 type Checksum = u64;
+
+pub struct FileSendSummary {
+    pub nonce: Nonce,
+    pub file_size: u64,
+    pub checksum: Checksum,
+    pub elapsed: std::time::Duration,
+}
+
+impl FileSendSummary {
+    fn new(nonce: Nonce, file_size: u64, checksum: Checksum, elapsed: std::time::Duration) -> Self {
+        Self {
+            nonce,
+            file_size,
+            checksum,
+            elapsed,
+        }
+    }
+}
 
 struct FileSendTracker {
     nonce: Nonce,
@@ -25,9 +44,19 @@ impl FileSendTracker {
         FileSendTracker { nonce, source_path }
     }
 
-    async fn send_file(&self, conn: &mut TcpConn, total_size: u64) -> Result<()> {
+    async fn send_file(
+        &self,
+        conn: &mut TcpConn,
+        total_size: u64,
+    ) -> std::result::Result<u64, FileSyncError> {
         // Acquire a read lock on the encrypted temp file to ensure consistency across processes
-        let guard = fs_lock::RwLock::new(&self.source_path).read().await?;
+        let guard = fs_lock::RwLock::new(&self.source_path)
+            .read()
+            .await
+            .map_err(|e| {
+                LOGGER.warn(format!("Failed to lock file: {:?}", e));
+                FileSyncError::SystemError
+            })?;
 
         LOGGER.trace(format!(
             "Sending file {} to peer",
@@ -35,11 +64,15 @@ impl FileSendTracker {
         ));
 
         // Clone the underlying std::fs::File so we can create an async file while keeping the lock guard alive
-        let std_file = guard.try_clone()?;
+        let std_file = guard.try_clone().map_err(|e| {
+            LOGGER.warn(format!("Failed to clone file: {:?}", e));
+            FileSyncError::SystemError
+        })?;
         let file = tokio::fs::File::from_std(std_file);
 
+        // Assume a 5 MB/s transfer rate as the low bound
         let write_timeout = conn.get_write_timeout().max(std::time::Duration::from_secs(
-            total_size / (1024 * 1024 * 10) as u64,
+            total_size / (1024 * 1024 * 5) as u64,
         ));
         let stream = &mut conn.stream;
 
@@ -49,16 +82,26 @@ impl FileSendTracker {
             total_size,
             write_timeout.as_secs_f64() * 1000.0
         ));
-        tokio::time::timeout(
+        let sz = tokio::time::timeout(
             write_timeout,
             tokio::io::copy(&mut file.take(total_size), stream),
         )
-        .await??;
-
-        Ok(())
+        .await
+        .map_err(|e| {
+            LOGGER.warn(format!("File transfer timed out {:?}", e));
+            FileSyncError::Timeout
+        })?
+        .map_err(|e| {
+            LOGGER.warn(format!("Failed writing to peer: {:?}", e));
+            FileSyncError::AbortedByPeer
+        })?;
+        Ok(sz)
     }
 
-    pub async fn send(&self, conn: &mut TcpConn) -> std::result::Result<(), FileSyncError> {
+    pub async fn send(
+        &self,
+        conn: &mut TcpConn,
+    ) -> std::result::Result<FileSendSummary, FileSyncError> {
         let lumo_file = LumoFile::new(self.source_path.clone()).await.map_err(|e| {
             LOGGER.warn(format!("LumoFile create error: {:?}", e));
             FileSyncError::SystemError
@@ -90,12 +133,14 @@ impl FileSendTracker {
             FileSyncError::AbortedByPeer
         })?;
 
+        let start_time = std::time::Instant::now();
         self.send_file(conn, total_size).await.map_err(|e| {
             LOGGER.warn(format!("File send error {:?}", e));
             FileSyncError::AbortedByPeer
         })?;
 
-        Ok(())
+        let summary = FileSendSummary::new(self.nonce, total_size, checksum, start_time.elapsed());
+        Ok(summary)
     }
 }
 
@@ -106,7 +151,7 @@ pub async fn send_file(
     nonce: u64,
     source_path: PathBuf,
     conn: &mut TcpConn,
-) -> std::result::Result<(), FileSyncError> {
+) -> std::result::Result<FileSendSummary, FileSyncError> {
     let tracker = FileSendTracker::new(nonce, source_path);
     tracker.send(conn).await
 }

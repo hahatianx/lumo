@@ -4,6 +4,7 @@ use crate::global_var::{ENV_VAR, LOGGER};
 use crate::network::TcpConn;
 use crate::types::Expected;
 use crate::utilities::crypto::f_from_encryption;
+use crate::utilities::format::size_to_human_readable;
 use bytes::Bytes;
 use rand::random;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,33 @@ use tokio::io::AsyncWriteExt;
 
 type Nonce = u64;
 type Checksum = u64;
+
+pub struct FileRecvSummary {
+    pub nonce: Nonce,
+    pub file_size: u64,
+    pub file_path: PathBuf,
+    pub download_time: std::time::Duration,
+    pub decrypt_time: std::time::Duration,
+}
+
+impl FileRecvSummary {
+    fn new(
+        nonce: Nonce,
+        file_size: u64,
+        file_path: PathBuf,
+        download_time: std::time::Duration,
+        decrypt_time: std::time::Duration,
+    ) -> Self {
+        Self {
+            nonce,
+            file_size,
+            file_path,
+            download_time,
+            decrypt_time,
+        }
+    }
+}
+
 pub struct FileRecvTracker {
     nonce: Nonce,
     expected_checksum: Expected<Checksum>,
@@ -59,14 +87,16 @@ impl FileRecvTracker {
         LOGGER.info(format!(
             "Starting file receive: nonce={}, size={} bytes -> {}",
             self.nonce,
-            total_size,
+            size_to_human_readable(total_size),
             self.target_path.display()
         ));
 
-        // expected transfer lower bound: 10 MB / s
-        // total_size / 1024 / 1024 / 10
+        // expected transfer lower bound: 5 MB / s
+        // total_size / 1024 / 1024 / 5
         let read_timeout =
-            Duration::from_secs(total_size / (1024 * 1024 * 10) + 1).max(conn.get_read_timeout());
+            Duration::from_secs(total_size / (1024 * 1024 * 5) + 1).max(conn.get_read_timeout());
+        LOGGER.debug(format!("Read timeout: {:?}", read_timeout));
+        let start_time = std::time::Instant::now();
         let stream = conn.stream;
         let sz = tokio::time::timeout(
             read_timeout,
@@ -82,11 +112,19 @@ impl FileRecvTracker {
             std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e))
         })?;
 
-        LOGGER.trace(format!("File transfer completed, received {} bytes", sz));
+        LOGGER.trace(format!(
+            "File transfer completed, received {} bytes, time elapsed {:?}, transfer speed {}/s.",
+            sz,
+            start_time.elapsed(),
+            size_to_human_readable((sz as f64 / start_time.elapsed().as_secs_f64()) as u64)
+        ));
 
         Ok(sz)
     }
-    pub async fn recv(&self, mut conn: TcpConn) -> std::result::Result<&PathBuf, FileSyncError> {
+    pub async fn recv(
+        &self,
+        mut conn: TcpConn,
+    ) -> std::result::Result<FileRecvSummary, FileSyncError> {
         let ack = self.sync(&mut conn).await.map_err(|e| {
             LOGGER.error(format!("FileSync failed: {:?}", e));
             FileSyncError::Timeout
@@ -107,7 +145,9 @@ impl FileRecvTracker {
                 FileSyncError::SystemError
             })?;
 
-        self.download_to_file(conn, &mut file, ack.file_size())
+        let start_download_time = std::time::Instant::now();
+        let f_sz = self
+            .download_to_file(conn, &mut file, ack.file_size())
             .await
             .map_err(|e| {
                 LOGGER.error(format!("Failed to download file: {:?}", e));
@@ -119,6 +159,7 @@ impl FileRecvTracker {
             return Err(FileSyncError::SystemError);
         }
 
+        let start_decrypt_time = std::time::Instant::now();
         let passphrase = format!("{}", ack.nonce());
         f_from_encryption(&self.enc_tmp_path, &self.target_path, &passphrase)
             .await
@@ -130,7 +171,14 @@ impl FileRecvTracker {
                 FileSyncError::FileMalformed
             })?;
 
-        Ok(&self.target_path)
+        let summary = FileRecvSummary::new(
+            ack.nonce(),
+            f_sz,
+            self.target_path.clone(),
+            start_download_time.elapsed(),
+            start_decrypt_time.elapsed(),
+        );
+        Ok(summary)
     }
 }
 

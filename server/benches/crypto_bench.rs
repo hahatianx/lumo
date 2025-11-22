@@ -35,8 +35,16 @@ fn bench_encrypt_decrypt(c: &mut Criterion) {
     let iv = [0xABu8; 16];
 
     for &sz in &sizes {
-        let label_enc = format!("encrypt_{}_{}B", ENV_VAR.get().unwrap().get_working_dir(), sz);
-        let label_dec = format!("decrypt_{}_{}B", ENV_VAR.get().unwrap().get_working_dir(), sz);
+        let label_enc = format!(
+            "encrypt_{}_{}B",
+            ENV_VAR.get().unwrap().get_working_dir(),
+            sz
+        );
+        let label_dec = format!(
+            "decrypt_{}_{}B",
+            ENV_VAR.get().unwrap().get_working_dir(),
+            sz
+        );
         let data = vec![0x55u8; sz];
         let data_bytes = Bytes::from(data);
 
@@ -82,7 +90,11 @@ fn bench_encrypt_decrypt_file(c: &mut Criterion) {
     ];
     const BAR: usize = 1024 * 1024 + 1;
     for &sz in &sizes {
-        let label_enc = format!("encrypt_file_{}_{}", ENV_VAR.get().unwrap().get_working_dir(), format_sz(sz));
+        let label_enc = format!(
+            "encrypt_file_{}_{}",
+            ENV_VAR.get().unwrap().get_working_dir(),
+            format_sz(sz)
+        );
 
         let tmp_f = PathBuf::from(ENV_VAR.get().unwrap().get_working_dir())
             .join(format!("bench-file-{}B", sz));

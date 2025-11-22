@@ -92,9 +92,18 @@ impl AsyncHandleable for SendFileTask {
 
         // 6. End the claimed job with proper status and log errors if any
         match res {
-            Ok(()) => {
+            Ok(summary) => {
                 // Mark job as completed
-                if let Err(e) = callback(JobStatus::Completed, String::new()).await {
+                let speed = crate::utilities::format::size_to_human_readable(
+                    (summary.file_size as f64 / summary.elapsed.as_secs_f64()) as u64,
+                );
+                let completion_message = format!(
+                    "File sent successfully in {}. Size: {} bytes, transfer speed {}/s",
+                    summary.elapsed.as_secs_f64(),
+                    summary.file_size,
+                    speed
+                );
+                if let Err(e) = callback(JobStatus::Completed, completion_message).await {
                     LOGGER.error(format!(
                         "Failed to update job status to Completed for nonce {:x}: {:?}",
                         nonce, e

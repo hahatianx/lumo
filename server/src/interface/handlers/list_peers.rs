@@ -1,5 +1,6 @@
 use crate::core::PEER_TABLE;
 use crate::err::Result;
+use crate::global_var::LOGGER;
 use api_model::protocol::models::peer::list_peers::{ListPeersRequest, ListPeersResponse, Peer};
 use cli_handler::cli_handler;
 use std::sync::atomic::Ordering;
@@ -14,6 +15,7 @@ fn ms_to_system_time(last_seen_ms: u64, time_zone: i32) -> SystemTime {
 #[cli_handler(ListPeers)]
 pub async fn list_peers(_request: &ListPeersRequest) -> Result<ListPeersResponse> {
     let peers = PEER_TABLE.get_peers().await;
+    LOGGER.debug(format!("List peers: {}", peers.len()));
 
     let peer_response: Vec<Peer> = peers
         .iter()

@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, LowerHex};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ExpectOrNone<T: PartialEq> {
@@ -62,4 +62,23 @@ impl<T: PartialEq> ExpectOrNone<T> {
         !self.match_expected(v)
     }
 }
+
+impl<T: PartialEq> AsRef<T> for ExpectOrNone<T> {
+    fn as_ref(&self) -> &T {
+        match self {
+            ExpectOrNone::Value(v) => v,
+            ExpectOrNone::Any => panic!("Cannot get reference to None"),
+        }
+    }
+}
+
+impl LowerHex for ExpectOrNone<u64> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExpectOrNone::Value(v) => write!(f, "{:x}", v),
+            ExpectOrNone::Any => write!(f, "0x0"),
+        }
+    }
+}
+
 pub type Expected<T> = ExpectOrNone<T>;

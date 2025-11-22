@@ -75,9 +75,9 @@ pub async fn start_file_download_task<P: AsRef<Path>>(
 
     let q_sender = get_task_queue_sender().await?;
     let job_name = format!(
-        "download: \"{}\", checksum: {}",
+        "download: \"{}\", checksum: {:016x}",
         path.as_ref().to_path_buf().display(),
-        to_checksum
+        &to_checksum
     );
     let summary = format!(
         "File download for \"{}\", challenge: {:016x}",
@@ -89,7 +89,7 @@ pub async fn start_file_download_task<P: AsRef<Path>>(
         Ok(())
     };
     let download_job_handle =
-        launch_claimable_job(&job_name, &summary, cleanup, 30, q_sender).await?;
+        launch_claimable_job(&job_name, &summary, cleanup, 300, q_sender).await?;
 
     let pending_download_task = PendingFileDownloadTask::new(
         challenge,
@@ -101,9 +101,9 @@ pub async fn start_file_download_task<P: AsRef<Path>>(
     insert_download_task(pending_download_task).await;
 
     LOGGER.info(format!(
-        "Pending file download for {}, checksum {}, with challenge {:?}",
+        "Pending file download for {}, checksum {:016x}, with challenge {:016x}",
         path.as_ref().to_path_buf().display(),
-        to_checksum,
+        &to_checksum,
         challenge
     ));
 
