@@ -5,7 +5,7 @@ use crate::global_var::LOGGER;
 use std::fmt::Debug;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock as AsyncRwLock;
 use xxhash_rust::xxh64::Xxh64;
@@ -103,16 +103,14 @@ impl LumoFile {
     pub async fn new(path: PathBuf) -> Result<Self> {
         let p: &Path = path.as_ref();
         let full_path = normalize_path(p.to_str().unwrap())?;
-        {
-            let _guard = RwLock::new(&full_path).read().await?;
-            let (size, mtime) = get_file_sz_and_mtime(&full_path)?;
-            Ok(Self {
-                path: full_path,
-                size,
-                mtime,
-                fingerprint: AsyncRwLock::new(FileFingerPrint::new(size, mtime)),
-            })
-        }
+        let _guard = RwLock::new(&full_path).write().await?;
+        // let (size, mtime) = get_file_sz_and_mtime(&full_path)?;
+        Ok(Self {
+            path: full_path,
+            size: 0,
+            mtime: UNIX_EPOCH,
+            fingerprint: AsyncRwLock::new(FileFingerPrint::new(0, UNIX_EPOCH)),
+        })
     }
 
     /// path must be an absolute path (used for initializing before metadata is known)

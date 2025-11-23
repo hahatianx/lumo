@@ -86,7 +86,7 @@ fn bench_encrypt_decrypt_file(c: &mut Criterion) {
         1024usize,
         1024 * 1024,
         100 * 1024 * 1024,
-        1024 * 1024 * 1024, // Too much damage to my SSD :(
+        // 1024 * 1024 * 1024, // Too much damage to my SSD :(
     ];
     const BAR: usize = 1024 * 1024 + 1;
     for &sz in &sizes {

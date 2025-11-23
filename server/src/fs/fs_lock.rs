@@ -1,6 +1,7 @@
 use crate::err::{Error, Result};
 use crate::fs::util::normalize_path;
 use crate::global_var::LOGGER;
+use crate::{lumo_error, lumo_error_with_source};
 use fs2::FileExt;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -26,12 +27,16 @@ pub(crate) struct FileLockGuard {
 }
 
 impl FileLockGuard {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(path: P, exclusive: bool) -> Result<Self> {
         let f = OpenOptions::new()
             .read(true)
             .write(true)
             .open(path.as_ref())?;
-        f.try_lock_exclusive()?;
+        if exclusive {
+            f.try_lock_exclusive()?;
+        } else {
+            f.try_lock_shared()?;
+        }
         Ok(Self { inner: f })
     }
 }
@@ -59,7 +64,7 @@ impl Drop for FileLockGuard {
 
 /// Acquire an exclusive, cross-process file lock via system-level locking.
 /// This function retries with exponential backoff for a bounded duration.
-pub(crate) async fn acquire_lock(path: &Path) -> Result<FileLockGuard> {
+pub(crate) async fn acquire_lock(path: &Path, exclusive: bool) -> Result<FileLockGuard> {
     let mut backoff_ms: u64 = 10;
     let max_backoff_ms: u64 = 500;
     let max_attempts: u32 = 100; // ~ up to a few seconds total
@@ -71,7 +76,7 @@ pub(crate) async fn acquire_lock(path: &Path) -> Result<FileLockGuard> {
     let mut last_err: Option<Error> = None;
 
     for _ in 0..max_attempts {
-        match FileLockGuard::new(&path) {
+        match FileLockGuard::new(&path, exclusive) {
             Ok(guard) => return Ok(guard),
             Err(e) => {
                 last_err = Some(e);
@@ -155,6 +160,14 @@ impl RwLock {
         }
     }
 
+    fn open_file(&self, path: &Path) -> Result<File> {
+        OpenOptions::new()
+            .read(true)
+            .create(true)
+            .open(path)
+            .map_err(|e| lumo_error!("Failed to open file with read lock: {}", e).into())
+    }
+
     /// Acquire a read lock. Multiple readers are allowed concurrently in-process.
     /// System-wide, we take a single exclusive lock for the duration of the first-to-last reader.
     pub async fn read(&self) -> Result<ReadGuard> {
@@ -171,10 +184,12 @@ impl RwLock {
             if state_guard.read_count.load(Ordering::Acquire) > 0 {
                 let file_lock = state_guard.sys_guard.as_ref().unwrap().clone();
                 state_guard.read_count.fetch_add(1, Ordering::AcqRel);
+                let f = self.open_file(&self.path)?;
                 return Ok(ReadGuard {
                     _guard: guard,
                     state: self.inner.clone(),
                     file_lock,
+                    file: f,
                 });
             }
         }
@@ -188,37 +203,45 @@ impl RwLock {
                 .inner
                 .state
                 .lock()
-                .map_err(|_| -> Error { "rwlock state poisoned".into() })?;
+                .map_err(|_| {
+                    lumo_error!("File lock state poisoned while initializing first reader")
+                })?;
             if state_guard.read_count.load(Ordering::Acquire) == 0 {
                 need_first = true;
             } else {
                 let file_lock = state_guard.sys_guard.as_ref().unwrap().clone();
                 state_guard.read_count.fetch_add(1, Ordering::AcqRel);
+                let f = self.open_file(&self.path)?;
                 return Ok(ReadGuard {
                     _guard: guard,
                     state: self.inner.clone(),
                     file_lock,
+                    file: f,
                 });
             }
         }
 
         if need_first {
             // Acquire the system-level exclusive lock without holding the state mutex
-            let sys = Arc::new(acquire_lock(&self.path).await?);
+            let sys = Arc::new(acquire_lock(&self.path, false).await?);
             // Install the sys lock and set first reader count
             let mut state_guard = self
                 .inner
                 .state
                 .lock()
-                .map_err(|_| -> Error { "rwlock state poisoned".into() })?;
+                .map_err(|_| {
+                    lumo_error!("File lock state poisoned while initializing first reader")
+                })?;
             // Since we still hold the init mutex, no other first-reader can race us.
             debug_assert_eq!(state_guard.read_count.load(Ordering::Relaxed), 0);
             state_guard.sys_guard = Some(sys.clone());
             state_guard.read_count.store(1, Ordering::Release);
+            let f = self.open_file(&self.path)?;
             return Ok(ReadGuard {
                 _guard: guard,
                 state: self.inner.clone(),
                 file_lock: sys,
+                file: f,
             });
         }
 
@@ -228,7 +251,7 @@ impl RwLock {
     /// Acquire a write lock. This is exclusive in-process and also guards cross-process
     /// by taking the sidecar file lock for the target path.
     pub async fn write(&self) -> crate::err::Result<WriteGuard> {
-        let lockfile = acquire_lock(&self.path).await?;
+        let lockfile = acquire_lock(&self.path, true).await?;
         let guard = self.inner.rw.clone().write_owned().await;
         Ok(WriteGuard {
             _guard: guard,
@@ -243,6 +266,7 @@ pub struct ReadGuard {
     _guard: OwnedRwLockReadGuard<()>,
     state: Arc<PerPathState>,
     file_lock: Arc<FileLockGuard>,
+    file: File,
 }
 
 impl Drop for ReadGuard {
@@ -260,9 +284,7 @@ impl Drop for ReadGuard {
 impl Deref for ReadGuard {
     type Target = File;
     fn deref(&self) -> &Self::Target {
-        let mut f = &self.file_lock.inner;
-        f.seek(std::io::SeekFrom::Start(0)).unwrap();
-        &self.file_lock.inner
+        &self.file
     }
 }
 
@@ -417,7 +439,7 @@ mod tests {
         let lock = Arc::new(RwLock::new(&path));
 
         // Pre-lock the file to force the reader into the slow-path waiting for system lock
-        let sys_guard = acquire_lock(&path).await.expect("pre-lock file");
+        let sys_guard = acquire_lock(&path, false).await.expect("pre-lock file");
 
         // Start a reader that will get stuck trying to acquire system lock
         let mut handle = tokio::spawn({

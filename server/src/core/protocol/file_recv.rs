@@ -12,6 +12,7 @@ use std::time::Duration;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
+use crate::lumo_error;
 
 type Nonce = u64;
 type Checksum = u64;
@@ -105,11 +106,11 @@ impl FileRecvTracker {
         .await
         .map_err(|e| {
             LOGGER.error(format!("Reading from stream timed out {:?}", e));
-            std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e))
+            lumo_error!("Reading from stream timed out, {:?}", e)
         })?
         .map_err(|e| {
             LOGGER.error(format!("Failed reading from connection: {:?}", e));
-            std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e))
+            lumo_error!("Failed reading from connection, {:?}", e)
         })?;
 
         LOGGER.trace(format!(

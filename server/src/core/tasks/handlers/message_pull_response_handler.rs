@@ -1,6 +1,5 @@
 use crate::constants::TCP_FILE_PORT;
 use crate::core::protocol::file_recv::{FileRecvSummary, FileRecvTracker};
-use crate::core::protocol::file_send::FileSendSummary;
 use crate::core::protocol::file_sync::FileSyncError;
 use crate::core::tasks::handlers::IGNORE_SELF;
 use crate::core::tasks::{AsyncHandleable, JobStatus, NetworkHandleable};
@@ -197,14 +196,12 @@ impl PullResponseMessage {
                     (summary.file_size as f64 / summary.decrypt_time.as_secs_f64()) as u64,
                 );
                 let msg = format!(
-                    "File downloaded successfully, file size: {}, download speed: {}, decrypt speed: {}",
-                    summary.file_size, download_speed, decrypt_speed
+                    "File size: {}, download speed: {}/s, decrypt speed: {}/s",
+                    size_to_human_readable(summary.file_size),
+                    download_speed,
+                    decrypt_speed
                 );
-                callback(
-                    JobStatus::Completed,
-                    msg,
-                )
-                .await?;
+                callback(JobStatus::Completed, msg).await?;
             }
             Err(e) => {
                 LOGGER.warn(format!(
