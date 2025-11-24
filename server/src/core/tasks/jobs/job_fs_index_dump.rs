@@ -17,12 +17,12 @@ pub async fn get_job_fs_index_dump_closure() -> Result<Box<JobClosure>> {
                     }
                     Err(_e) => {}
                 };
-                LOGGER.trace(format!(
-                    "[fs dump] Latest dumped index checksum: lass_index_dump_checksum: {:?} ",
-                    last_index_dump_checksum
-                        .as_ref()
-                        .map(|c| format!("0x{:x}", c))
-                ));
+                // LOGGER.trace(format!(
+                //     "[fs dump] Latest dumped index checksum: lass_index_dump_checksum: {:?} ",
+                //     last_index_dump_checksum
+                //         .as_ref()
+                //         .map(|c| format!("0x{:x}", c))
+                // ));
                 Ok(())
             });
         fut

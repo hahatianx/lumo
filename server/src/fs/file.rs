@@ -104,12 +104,12 @@ impl LumoFile {
         let p: &Path = path.as_ref();
         let full_path = normalize_path(p.to_str().unwrap())?;
         let _guard = RwLock::new(&full_path).write().await?;
-        // let (size, mtime) = get_file_sz_and_mtime(&full_path)?;
+        let (size, mtime) = get_file_sz_and_mtime(&full_path)?;
         Ok(Self {
             path: full_path,
-            size: 0,
-            mtime: UNIX_EPOCH,
-            fingerprint: AsyncRwLock::new(FileFingerPrint::new(0, UNIX_EPOCH)),
+            size,
+            mtime,
+            fingerprint: AsyncRwLock::new(FileFingerPrint::new(size, mtime)),
         })
     }
 

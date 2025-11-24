@@ -163,7 +163,6 @@ impl RwLock {
     fn open_file(&self, path: &Path) -> Result<File> {
         OpenOptions::new()
             .read(true)
-            .create(true)
             .open(path)
             .map_err(|e| lumo_error!("Failed to open file with read lock: {}", e).into())
     }
@@ -180,7 +179,9 @@ impl RwLock {
                 .inner
                 .state
                 .lock()
-                .map_err(|_| -> Error { "rwlock state poisoned".into() })?;
+                .map_err(|_| {
+                    lumo_error!("File lock state poisoned while acquiring read guard")
+                })?;
             if state_guard.read_count.load(Ordering::Acquire) > 0 {
                 let file_lock = state_guard.sys_guard.as_ref().unwrap().clone();
                 state_guard.read_count.fetch_add(1, Ordering::AcqRel);
