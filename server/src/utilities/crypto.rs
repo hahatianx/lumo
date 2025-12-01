@@ -3,7 +3,6 @@ use crate::fs::fs_lock;
 use crate::global_var::{ENV_VAR, LOGGER};
 use crate::utilities::crypto;
 use aes::Aes256;
-use age::secrecy::SecretString;
 use bincode::config;
 use bytes::Bytes;
 use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};

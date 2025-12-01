@@ -62,11 +62,11 @@ pub struct JobStatusDisplay(pub JobStatus);
 impl JobStatusDisplay {
     fn display(&self) -> String {
         match self.0 {
-            JobStatus::Running => String::from("Running"),
+            JobStatus::Running => xterm_color::bold("Running"),
             JobStatus::Completed => xterm_color::bold_green("Completed"),
             JobStatus::Failed => xterm_color::bold_red("Failed"),
             JobStatus::TimedOut => xterm_color::bold_yellow("Timed out"),
-            JobStatus::Pending => xterm_color::bold("Pending"),
+            JobStatus::Pending => String::from("Pending"),
             JobStatus::Shutdown => xterm_color::bold("Shutdown"),
             _ => xterm_color::red("Unknown"),
         }

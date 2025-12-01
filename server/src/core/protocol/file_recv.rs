@@ -1,6 +1,7 @@
 use crate::core::protocol::file_sync::{FileSync, FileSyncAck, FileSyncError};
 use crate::err::Result;
 use crate::global_var::{ENV_VAR, LOGGER};
+use crate::lumo_error;
 use crate::network::TcpConn;
 use crate::types::Expected;
 use crate::utilities::crypto::f_from_encryption;
@@ -12,7 +13,6 @@ use std::time::Duration;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
-use crate::lumo_error;
 
 type Nonce = u64;
 type Checksum = u64;

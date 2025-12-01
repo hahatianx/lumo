@@ -1,11 +1,10 @@
 use crate::err::Result;
 use crate::fs::fs_lock::{LumoFileGuard, RwLock};
 use crate::fs::util::{get_relative_path, normalize_path, round_to_fat32};
-use crate::global_var::LOGGER;
 use std::fmt::Debug;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock as AsyncRwLock;
 use xxhash_rust::xxh64::Xxh64;

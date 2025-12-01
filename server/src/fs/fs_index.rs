@@ -954,14 +954,14 @@ impl FileIndex {
                         // Upsert will refresh indices/meta atomically
                         self.refresh_on_checked(&path, cur_ver, entry).await?;
                         LOGGER.trace(format!(
-                            "index_anti_entropy: refreshed '{}'",
+                            "[index_anti_entropy] refreshed '{}'",
                             path.display()
                         ))
                     }
                     Err(e) => {
                         // This is not expected to happen, but if it does, we should log it
                         LOGGER.error(format!(
-                            "index_anti_entropy: failed to refresh '{}': {}",
+                            "[index_anti_entropy] failed to refresh '{}': {}",
                             path.display(),
                             e
                         ));

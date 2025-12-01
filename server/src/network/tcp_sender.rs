@@ -204,7 +204,7 @@ mod tests {
         // Connect using TcpConn and send data
         let mut conn = TcpConn::connect(dest).await?;
         conn.send_all(b"hello-from-tcp-conn").await?;
-        // Graceful shutdown write side so server sees EOF
+        // Graceful shutdown write side so the server sees EOF
         let _ = conn.shutdown().await;
 
         // Verify receipt

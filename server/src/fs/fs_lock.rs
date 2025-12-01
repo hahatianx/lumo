@@ -1,19 +1,16 @@
 use crate::err::{Error, Result};
 use crate::fs::util::normalize_path;
-use crate::global_var::LOGGER;
-use crate::{lumo_error, lumo_error_with_source};
+use crate::lumo_error;
 use fs2::FileExt;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::{File, OpenOptions};
-use std::io::Seek;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::RwLock as TokioRwLock;
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard};
@@ -175,11 +172,8 @@ impl RwLock {
 
         // Fast path: if there are existing readers in this process, just bump the counter
         {
-            let state_guard = self
-                .inner
-                .state
-                .lock()
-                .map_err(|_| {
+            let state_guard =
+                self.inner.state.lock().map_err(|_| {
                     lumo_error!("File lock state poisoned while acquiring read guard")
                 })?;
             if state_guard.read_count.load(Ordering::Acquire) > 0 {
@@ -200,13 +194,9 @@ impl RwLock {
         // Decide if we are the first reader without holding the state mutex across await
         let need_first;
         {
-            let state_guard = self
-                .inner
-                .state
-                .lock()
-                .map_err(|_| {
-                    lumo_error!("File lock state poisoned while initializing first reader")
-                })?;
+            let state_guard = self.inner.state.lock().map_err(|_| {
+                lumo_error!("File lock state poisoned while initializing first reader")
+            })?;
             if state_guard.read_count.load(Ordering::Acquire) == 0 {
                 need_first = true;
             } else {
@@ -226,13 +216,9 @@ impl RwLock {
             // Acquire the system-level exclusive lock without holding the state mutex
             let sys = Arc::new(acquire_lock(&self.path, false).await?);
             // Install the sys lock and set first reader count
-            let mut state_guard = self
-                .inner
-                .state
-                .lock()
-                .map_err(|_| {
-                    lumo_error!("File lock state poisoned while initializing first reader")
-                })?;
+            let mut state_guard = self.inner.state.lock().map_err(|_| {
+                lumo_error!("File lock state poisoned while initializing first reader")
+            })?;
             // Since we still hold the init mutex, no other first-reader can race us.
             debug_assert_eq!(state_guard.read_count.load(Ordering::Relaxed), 0);
             state_guard.sys_guard = Some(sys.clone());

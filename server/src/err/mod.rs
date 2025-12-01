@@ -58,9 +58,7 @@ impl Display for LumoError {
 
 impl std::error::Error for LumoError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source
-            .as_deref()
-            .map(|e| e as &(dyn std::error::Error))
+        self.source.as_deref().map(|e| e as &dyn std::error::Error)
     }
 }
 
